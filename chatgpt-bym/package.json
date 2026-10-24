@@ -1,0 +1,12 @@
+{
+  "name": "chatgpt-bym",
+  "version": "1.1.0",
+  "description": "云崽（Yunzai）伪人模式插件：基于 OpenAI 兼容 API 的群聊拟人化自动聊天",
+  "type": "module",
+  "main": "index.js",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "js-yaml": "^4.3.2"
+  }
+}

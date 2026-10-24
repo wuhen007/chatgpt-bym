@@ -1,0 +1,76 @@
+enable: false
+commandPrefix: '#bym'
+trigger:
+  groupMode: whitelist
+  groups: []
+  hitKeywords:
+    - bym
+  probability: 0.02
+  cooldownSeconds: 60
+  maxPerHour: 6
+  bypassCooldownOnKeyword: false
+  ignoreAtOthers: true
+  ignoreCommandPrefixes:
+    - '#'
+    - /
+  minLength: 1
+  maxLength: 200
+  muteKeywords:
+    - '[CQ:xml'
+    - 拼多多
+    - 砍一刀
+speaking:
+  mode: reply
+  contextualPrompt: 你现在不是在回复某一条特定消息，而是作为这个群里的一名普通群友自然参与当前聊天。请阅读前面的群聊上下文，选择一个自然的切入点发言，可以接续话题、补充信息、吐槽、提问或表达态度。不要解释任务，不要提及“上下文”“指令”“AI”或“机器人”，不要强行引用、@或逐句回答触发你的那条消息。直接输出一段适合发到群里的自然发言。
+  defaultPresetId: bym_default
+  presetPrefix: ''
+  presetMap: []
+  recallSeconds: 0
+  splitReplies: true
+  maxSegmentLength: 120
+  typingDelay:
+    minMs: 800
+    perCharMs: 35
+    maxMs: 6000
+  gapDelay:
+    minMs: 300
+    maxMs: 1200
+llm:
+  baseURL: https://api.openai.com/v1
+  apiKey: ''
+  model: gpt-4o-mini
+  temperature: 0.9
+  topP: 1
+  maxTokens: 300
+  timeoutMs: 60000
+  stream: false
+  retries: 2
+  extraHeaders: {}
+  extraBody: {}
+  fallback: []
+context:
+  enable: true
+  length: 20
+  cacheTTL: 0
+  header: |-
+    <settings>
+    You are a member of a chat group, whose name is ${group.name}, and the group id is ${group.id}.
+    </settings>Latest several messages in the group chat:
+    | 群名片 | 昵称 | qq号 | 群角色 | 时间 | 消息内容 |
+    |---|---|---|---|---|---|
+  message: '| ${message.sender.card} | ${message.sender.nickname} | ${message.sender.user_id} | ${message.sender.role} | ${message.time} | ${message.raw_message} |'
+vision:
+  enable: false
+  maxImageSize: 1048576
+  maxImageDimension: 2000
+  maxImages: 3
+  includeContextImages: false
+memory:
+  enable: false
+  injectLimit: 5
+  extract: true
+  extractModel: ''
+  maxFactsPerGroup: 200
+  extractPrompt: >-
+    你是一个群聊记忆抽取助手。阅读给出的群聊记录，抽出值得长期记住的事实（成员身份/职业/所在地、群内的约定与梗、发生过的事件与决定、成员明确的偏好）。不要抽取寒暄、日常闲聊、与机器人互动的指令。返回 JSON 数组，每个元素形如 {"fact":"用一句话完整描述","topic":"主题词","importance":0.5}，importance 取 0~1。没有值得记的就返回
+    []。不要输出任何解释或代码块标记。

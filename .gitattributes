@@ -1,0 +1,10 @@
+# 统一用 LF：插件主要跑在 Linux 服务器（云崽宿主）上，
+# 避免 Windows 检出后 CRLF 混进 shell 脚本与 yaml。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
