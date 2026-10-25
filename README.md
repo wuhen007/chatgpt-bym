@@ -2,12 +2,27 @@
 
 云崽（Yunzai）的**伪人模式**插件：让机器人在 QQ 群里像普通群友一样，按概率或关键词偶尔插一句话。
 
-不用 @ 它，它不会回复每一条消息。这是它和普通问答插件的区别。
+不用 @ 它，它不会回复每一条消息 —— 这是它和普通问答插件的区别。但 **@ 它的时候一定会回**。
 
 - 通过 OpenAI 兼容接口调模型，可以接官方、中转站或本地部署
 - 零原生依赖（不需要 sqlite3 / sharp / nodejieba），`pnpm i` 只装一个 `js-yaml`
 - 支持 TRSS-Yunzai，适配 [锅巴面板](https://gitee.com/guoba-yunzai/guoba-plugin) 可视化配置
-- 附完整部署文档、契约测试与仿真测试
+- 六道闸门控制「说不说」：去重 → 触发 → 上下文 → 语义把关 → 防自曝 → 拟人化发送
+- 附完整部署文档、223 项单测与 58 项仿真测试
+
+## 它和普通 AI 插件的区别
+
+普通问答插件是「有问必答」，伪人是「该不该说」：
+
+| 能力 | 说明 |
+|---|---|
+| 被点名必回 | `@` 必定接话，并压过冷却（但绕不过每小时上限） |
+| 概率接话 | 没被点名时按 `probability` 掷骰子，默认 2% |
+| 语义把关 | 可选，让模型判断「这时候插话合不合适」（在吵架/刷广告就不插） |
+| 防自曝 | 回复里出现「我是 AI」「我的训练数据」时这一轮不发 |
+| 去重与回声 | 挡住协议端重投，以及「我回我自己」的死循环 |
+| 拟人化发送 | 按标点分条、按字数算打字延迟、不引用原消息 |
+| 群记忆 | 记忆由回复顺带产出，不额外调用接口 |
 
 ---
 
@@ -52,20 +67,22 @@
 ├── LICENSE                    # GPL-3.0
 ├── docs/
 │   ├── TRSS-Yunzai-LuckyLilliaBot-部署指南.md
-│   └── 模拟测试报告-TRSS-LLBot-伪人插件.md
+│   ├── 模拟测试报告-TRSS-LLBot-伪人插件.md
+│   ├── fatfish-可借鉴点分析.md
+│   └── 审核报告-v1.3.0.md
 └── chatgpt-bym/               # 插件本体（整个目录放进云崽 plugins/ 即可）
     ├── INSTALL.md             # 安装教程
     ├── GUOBA.md               # 锅巴面板适配说明与分析
     ├── README.md              # 设计说明与变更记录
-    ├── guoba.support.js       # 锅巴配置定义（60+ 项）
+    ├── guoba.support.js       # 锅巴配置定义（10 组、70+ 项）
     ├── index.js
     ├── apps/                  # 插件类：伪人主逻辑 + 管理指令
-    ├── models/                # 接口客户端、编排、预设、记忆
-    ├── utils/                 # 触发闸门、群上下文、拟人化发送、图片
+    ├── models/                # 接口客户端、编排、语义把关、回复解析、预设、记忆
+    ├── utils/                 # 去重、触发闸门、上下文、预算裁剪、出站守卫、拟人化发送
     ├── presets/               # 人设文件
     ├── config/
     │   └── config.example.yaml
-    └── tests/                 # 61 项自测（不需要云崽宿主）
+    └── tests/                 # 223 项自测（不需要云崽宿主）
 ```
 
 ---
@@ -101,11 +118,13 @@ llm:
 
 | 文档 | 内容 |
 |---|---|
-| [INSTALL.md](./chatgpt-bym/INSTALL.md) | 环境依赖、安装步骤、全字段配置、14 条常见问题排查 |
+| [INSTALL.md](./chatgpt-bym/INSTALL.md) | 环境依赖、安装步骤、全字段配置、17 条常见问题排查 |
 | [GUOBA.md](./chatgpt-bym/GUOBA.md) | 锅巴插件机制分析、面板字段对照、排错 |
-| [chatgpt-bym/README.md](./chatgpt-bym/README.md) | 设计取舍、能力对照、变更记录 |
+| [chatgpt-bym/README.md](./chatgpt-bym/README.md) | 设计取舍、能力对照、六道闸门说明、变更记录 |
 | [部署指南](./docs/TRSS-Yunzai-LuckyLilliaBot-部署指南.md) | TRSS-Yunzai 安装 + LuckyLilliaBot 对接 + 端口对照 |
 | [模拟测试报告](./docs/模拟测试报告-TRSS-LLBot-伪人插件.md) | 33 个场景的测试过程、发现的问题与修复 |
+| [可借鉴点分析](./docs/fatfish-可借鉴点分析.md) | 同类项目 fatfish-qq-bot 的架构对比，8 处借鉴点的取舍 |
+| [审核报告](./docs/审核报告-v1.3.0.md) | 两轮代码审核共 17 条问题，含复现探针与修复记录 |
 
 ---
 
@@ -113,12 +132,20 @@ llm:
 
 ```bash
 cd chatgpt-bym
-node tests/smoke.mjs   # 28 项：配置、分段、触发、冷却、记忆、预设、发送
-node tests/llm.mjs     # 10 项：端点归一化、请求体、流式、重试、换渠道
-node tests/guoba.mjs   # 23 项：锅巴契约、schema 合法性、读写往返
+node tests/smoke.mjs       # 44 项：配置、分段、触发闸门、冷却退配额、记忆、发送
+node tests/llm.mjs         # 10 项：端点归一化、请求体、流式、重试、换渠道
+node tests/guoba.mjs       # 23 项：锅巴契约、schema 合法性、读写往返
+node tests/config.mjs      # 31 项：扫源码验证每个 config.xxx 都能解析、数组类型修正
+node tests/guard.mjs       # 31 项：出站守卫，必拦句式、不误伤、判定降级
+node tests/dedup.mjs       # 17 项：去重与回声，TTL 过期、硬上限
+node tests/budget.mjs      # 15 项：上下文裁剪顺序与边界
+node tests/gate.mjs        # 26 项：语义把关，打分解析、阈值、失败放行
+node tests/replyParser.mjs # 26 项：JSON 契约解析与六种坏输出的退化
 ```
 
-不需要云崽，也不需要真实 API Key（测试会起本地假服务并隔离配置目录）。
+合计 **223 项**，不需要云崽，也不需要真实 API Key（测试会起本地假服务并隔离配置目录）。
+
+另有 `sim-lab/` 里的 58 项仿真（协议层 7 + 业务层 51），需要 TRSS 宿主桩件。
 
 ---
 
