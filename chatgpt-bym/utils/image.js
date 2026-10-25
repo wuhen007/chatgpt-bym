@@ -1,14 +1,29 @@
 import { config } from '../config/config.js'
 
-/** QQ 图片 URL 有效期有限，缓存只为了同一轮里图片被引用两次时少下一次 */
+/**
+ * QQ 图片 URL 有效期有限，缓存只为了同一轮里图片被引用两次时少下一次。
+ * 按条数淘汰之外还加了 TTL：只按数量淘汰的话，一条反复出现的图会永久留在表里，
+ * 而 QQ 的 CDN 链接过期后再拿它去请求只会 403 —— 缓存的是内容所以影响有限，
+ * 但过期的条目迟早要清掉。
+ */
 const IMAGE_CACHE = new Map()
 const IMAGE_CACHE_MAX = 60
+const IMAGE_CACHE_TTL = 5 * 60 * 1000
+
+function sweepImageCache () {
+  const cutoff = Date.now() - IMAGE_CACHE_TTL
+  for (const [url, entry] of IMAGE_CACHE) {
+    if (entry.at >= cutoff) continue
+    IMAGE_CACHE.delete(url)
+  }
+}
 
 function rememberImage (url, value) {
-  if (IMAGE_CACHE.size >= IMAGE_CACHE_MAX) {
+  sweepImageCache()
+  while (IMAGE_CACHE.size >= IMAGE_CACHE_MAX) {
     IMAGE_CACHE.delete(IMAGE_CACHE.keys().next().value)
   }
-  IMAGE_CACHE.set(url, value)
+  IMAGE_CACHE.set(url, { value, at: Date.now() })
 }
 
 /**
@@ -78,7 +93,8 @@ export function sniffImageSize (buffer) {
 export async function fetchImageAsDataUrl (url) {
   if (!url || typeof url !== 'string') return null
   const cached = IMAGE_CACHE.get(url)
-  if (cached) return cached
+  // 过期条目当作没缓存（内存里还留着，等下次写入时统一清）
+  if (cached && cached.at >= Date.now() - IMAGE_CACHE_TTL) return cached.value
 
   const maxBytes = Math.max(64 * 1024, Number(config.vision.maxImageSize) || 1048576)
   const maxDimension = Math.min(8000, Math.max(1, Number(config.vision.maxImageDimension) || 2000))

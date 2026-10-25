@@ -36,8 +36,9 @@ export function isGroupAllowed (groupId) {
  * 前置过滤，返回跳过原因；通过则返回 null。
  * @param {object} e 云崽事件
  * @param {string} text 已转好的纯文本
+ * @param {{addressed?: boolean}} [options] 已经算过「是否 @ 了机器人」时传进来，省一次扫描
  */
-export function precheck (e, text) {
+export function precheck (e, text, options = {}) {
   if (!config.enabled) return SKIP.DISABLED
   if (!e?.isGroup) return SKIP.NOT_GROUP
   if (!isGroupAllowed(e.group_id)) return SKIP.GROUP_FILTERED
@@ -59,10 +60,35 @@ export function precheck (e, text) {
   if (selfId && senderId === selfId) return SKIP.SELF
 
   // 用原始消息段判断而不是正则扫文本：@ 后面跟的东西不一定是昵称，
-  // 正则会被“邮箱是 a@b.com”这类内容误伤
-  if (trigger.ignoreAtOthers && hasAtOthers(e)) return SKIP.AT_OTHERS
+  // 正则会被“邮箱是 a@b.com”这类内容误伤。
+  //
+  // 被点名时不受 ignoreAtOthers 限制：一句话同时 @ 了我和别人，
+  // 说明确实在叫我，让给「@ 别人就不插话」挡掉就成了装死。
+  if (trigger.ignoreAtOthers) {
+    const addressed = options.addressed ?? isAddressed(e)
+    if (!addressed && hasAtOthers(e)) return SKIP.AT_OTHERS
+  }
 
   return null
+}
+
+/**
+ * 这条消息是不是在跟机器人说话（@ 了它，或者回复了它的消息）。
+ *
+ * 只认消息段，不用正则扫文本 —— 文本里的 "@" 可能是邮箱。
+ * 三种来源都要认：
+ * - `e.atBot`：部分分支直接给的布尔（TRSS 有）
+ * - 摊平格式：TRSS/icqq 把 `data` 摊平了，读 `elem.qq`
+ * - 原始 OneBot：读 `elem.data.qq`
+ */
+export function isAddressed (e) {
+  if (e?.atBot === true) return true
+  const selfId = String(e?.self_id || e?.bot?.uin || '')
+  if (!selfId || !Array.isArray(e?.message)) return false
+  return e.message.some(elem => {
+    if (elem?.type !== 'at') return false
+    return String(elem.qq ?? elem.data?.qq ?? '') === selfId
+  })
 }
 
 function hasAtOthers (e) {
@@ -90,19 +116,31 @@ export function matchKeyword (text) {
  * 完整判定。概率在这里只掷一次骰子，
  * 调用方拿到 forced 后仍需过冷却（除非显式配置允许绕过）。
  *
- * @returns {{pass: boolean, forced: boolean, reason: string|null, dice: number}}
+ * 三档优先级：被点名 > 命中关键词 > 概率。
+ * 「被点名」单独标出来（`addressed`）是因为它的冷却策略和关键词不同：
+ * 名字都叫了还不理，比「偶尔插错话」难解释得多。
+ *
+ * @returns {{pass: boolean, forced: boolean, addressed: boolean, reason: string|null, dice: number}}
  */
 export function evaluate (e, text) {
-  const skipped = precheck(e, text)
-  if (skipped) return { pass: false, forced: false, reason: skipped, dice: 0 }
+  // 只扫一次消息段：precheck 和下面的「被点名」判断共用这个结果
+  const addressed = isAddressed(e)
+  const skipped = precheck(e, text, { addressed })
+  if (skipped) return { pass: false, forced: false, addressed: false, reason: skipped, dice: 0 }
+
+  // 被 @ 时必回。关掉这个开关的话，@ 会退回「走关键词/概率」的正常路径，
+  // 而不是直接不回答 —— 否则一关就等于「叫它也不应」。
+  if (addressed && config.trigger.replyWhenAddressed !== false) {
+    return { pass: true, forced: true, addressed: true, reason: null, dice: 0 }
+  }
 
   const forced = matchKeyword(text)
-  if (forced) return { pass: true, forced: true, reason: null, dice: 0 }
+  if (forced) return { pass: true, forced: true, addressed: false, reason: null, dice: 0 }
 
   const probability = Math.min(1, Math.max(0, Number(config.trigger.probability) || 0))
   const dice = Math.random()
   if (dice >= probability) {
-    return { pass: false, forced: false, reason: SKIP.NO_LUCK, dice }
+    return { pass: false, forced: false, addressed: false, reason: SKIP.NO_LUCK, dice }
   }
-  return { pass: true, forced: false, reason: null, dice }
+  return { pass: true, forced: false, addressed: false, reason: null, dice }
 }

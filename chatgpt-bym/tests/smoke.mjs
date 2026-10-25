@@ -32,8 +32,8 @@ const { config } = await import('../config/config.js')
 const { splitText, typingDelayMs, sendHumanized } = await import('../utils/humanize.js')
 const { renderTemplate, formatTime } = await import('../utils/groupContext.js')
 const { evaluate, SKIP } = await import('../utils/trigger.js')
-const { checkRate, markSpoken, resetRate } = await import('../utils/rateLimit.js')
-const { addFact, queryFacts, buildMemoryPrompt, memoryStats, clearMemory } = await import('../models/memory.js')
+const { checkRate, markSpoken, resetRate, refundSpoken, rateStats } = await import('../utils/rateLimit.js')
+const { addFact, queryFacts, buildMemoryPrompt, memoryStats, clearMemory, flushMemory } = await import('../models/memory.js')
 const { loadPresets, resolvePreset } = await import('../models/preset.js')
 const { postProcess, resolveMode } = await import('../models/chatService.js')
 
@@ -136,6 +136,51 @@ test('概率为 0 时不触发', () => {
   assert.equal(evaluate(fakeEvent(), '随便说点什么').reason, SKIP.NO_LUCK)
 })
 
+console.log('\n[4b] 被点名')
+const { isAddressed } = await import('../utils/trigger.js')
+test('@ 机器人判为 addressed（摊平格式）', () => {
+  const e = fakeEvent({ message: [{ type: 'at', qq: '999' }, { type: 'text', text: ' 你说呢' }] })
+  assert.equal(isAddressed(e), true)
+})
+test('@ 机器人判为 addressed（原始 OneBot 的 data 包裹）', () => {
+  const e = fakeEvent({ message: [{ type: 'at', data: { qq: '999' } }, { type: 'text', text: ' 你说呢' }] })
+  assert.equal(isAddressed(e), true)
+})
+test('e.atBot 布尔也认', () => {
+  assert.equal(isAddressed(fakeEvent({ atBot: true })), true)
+})
+test('@ 别人不算 addressed', () => {
+  const e = fakeEvent({ message: [{ type: 'at', qq: '10001' }, { type: 'text', text: ' 你看' }] })
+  assert.equal(isAddressed(e), false)
+})
+test('@ 机器人必触发，即使概率为 0 且不含关键词', () => {
+  config.data.trigger.hitKeywords = ['zzz']
+  config.data.trigger.probability = 0
+  config.data.trigger.replyWhenAddressed = true
+  const e = fakeEvent({ message: [{ type: 'at', qq: '999' }, { type: 'text', text: ' 你说呢' }] })
+  const r = evaluate(e, '@机器人 你说呢')
+  assert.equal(r.pass, true)
+  assert.equal(r.addressed, true)
+  assert.equal(r.forced, true)
+})
+test('同时 @ 了机器人和别人，也不被 ignoreAtOthers 挡掉', () => {
+  config.data.trigger.ignoreAtOthers = true
+  const e = fakeEvent({
+    message: [{ type: 'at', qq: '999' }, { type: 'at', qq: '10001' }, { type: 'text', text: ' 你们俩看下' }],
+  })
+  assert.equal(evaluate(e, '@机器人 @李四 你们俩看下').addressed, true)
+})
+test('关掉 replyWhenAddressed 后退回概率判断（不是直接不理）', () => {
+  config.data.trigger.replyWhenAddressed = false
+  config.data.trigger.probability = 0
+  config.data.trigger.hitKeywords = ['zzz']
+  const e = fakeEvent({ message: [{ type: 'at', qq: '999' }, { type: 'text', text: ' 你说呢' }] })
+  const r = evaluate(e, '@机器人 你说呢')
+  assert.equal(r.pass, false)
+  assert.equal(r.reason, SKIP.NO_LUCK, '应该是走概率被拒，而不是被 @ 规则拒绝')
+  config.data.trigger.replyWhenAddressed = true
+})
+
 console.log('\n[5] 冷却与频率')
 test('首次放行，冷却期内拒绝', () => {
   resetRate('123456')
@@ -153,6 +198,67 @@ test('每小时上限生效', () => {
   markSpoken('777')
   assert.equal(checkRate('777').ok, false)
 })
+test('被点名时能绕过冷却', () => {
+  resetRate('888')
+  config.data.trigger.cooldownSeconds = 60
+  config.data.trigger.maxPerHour = 6
+  markSpoken('888')
+  assert.equal(checkRate('888').ok, false, '不豁免时应在冷却中')
+  assert.equal(checkRate('888', { bypassCooldown: true }).ok, true, '豁免后应放行')
+})
+test('被点名也绕不过每小时上限', () => {
+  resetRate('999')
+  config.data.trigger.cooldownSeconds = 60
+  config.data.trigger.maxPerHour = 2
+  markSpoken('999')
+  markSpoken('999')
+  assert.equal(checkRate('999', { bypassCooldown: true }).ok, false, '豁免只针对冷却，不针对上限')
+})
+test('退配额：退还后可以再发一次', () => {
+  resetRate('aaa')
+  config.data.trigger.cooldownSeconds = 60
+  config.data.trigger.maxPerHour = 2
+  const token = markSpoken('aaa')
+  assert.equal(checkRate('aaa').ok, false)
+  refundSpoken('aaa', token)
+  assert.equal(checkRate('aaa').ok, true, '退还后应恢复')
+  assert.equal(rateStats('aaa').inLastHour, 0)
+})
+test('退配额退的是最后一次，不当成把冷却清空', () => {
+  resetRate('bbb')
+  config.data.trigger.cooldownSeconds = 60
+  config.data.trigger.maxPerHour = 5
+  markSpoken('bbb')
+  const second = markSpoken('bbb')
+  refundSpoken('bbb', second)
+  assert.equal(rateStats('bbb').inLastHour, 1, '只该退一条')
+  assert.equal(checkRate('bbb').ok, false, '还剩一条，仍在冷却中')
+})
+test('带 token 退款精确退自己那次（并发场景）', () => {
+  resetRate('ccc')
+  config.data.trigger.cooldownSeconds = 0
+  config.data.trigger.maxPerHour = 10
+  const a = markSpoken('ccc')        // A 先记账
+  const b = markSpoken('ccc')        // B 后记账（并发）
+  const bAt = rateStats('ccc').lastAt
+
+  refundSpoken('ccc', a)             // A 被 gate 拒，退自己那次
+  const st = rateStats('ccc')
+  assert.equal(st.inLastHour, 1, '只退 A，B 应保留')
+  assert.equal(st.lastAt, bAt, 'lastAt 应仍是 B 的时间（刚发过言的那个）')
+})
+test('token 已被清理时退款不报错', () => {
+  resetRate('ddd')
+  const t = markSpoken('ddd')
+  refundSpoken('ddd', t)
+  refundSpoken('ddd', t)             // 重复退
+  assert.equal(rateStats('ddd').inLastHour, 0)
+})
+test('空表上退配额不报错', () => {
+  resetRate('eee')
+  refundSpoken('eee')
+  assert.equal(rateStats('eee').inLastHour, 0)
+})
 
 console.log('\n[6] 记忆')
 test('写入并按相关度召回', () => {
@@ -168,6 +274,18 @@ test('重复事实不重复写入', () => {
   const before = memoryStats('g-test').count
   addFact('g-test', { fact: '张三在字节跳动做后端开发' })
   assert.equal(memoryStats('g-test').count, before)
+})
+test('deferred 批量写入：数据立刻在内存里，返回值表示是否新增', () => {
+  clearMemory('g-defer')
+  assert.equal(addFact('g-defer', { fact: 'AAA 在杭州', deferred: true }), true)
+  assert.equal(addFact('g-defer', { fact: 'BBB 在南京', deferred: true }), true)
+  // 重复的返回 false，调用方据此统计真正新增了几条
+  assert.equal(addFact('g-defer', { fact: 'AAA 在杭州', deferred: true }), false)
+  assert.equal(memoryStats('g-defer').count, 2)
+})
+test('flushMemory 存在且可调用', () => {
+  assert.equal(typeof flushMemory, 'function')
+  assert.doesNotThrow(() => flushMemory())
 })
 test('注入提示词包含条目', () => {
   const prompt = buildMemoryPrompt('g-test', '张三', 5)

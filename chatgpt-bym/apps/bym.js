@@ -1,11 +1,12 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import { config } from '../config/config.js'
 import { evaluate, SKIP } from '../utils/trigger.js'
-import { checkRate, markSpoken } from '../utils/rateLimit.js'
+import { checkRate, markSpoken, refundSpoken } from '../utils/rateLimit.js'
 import { displayName, messageToText } from '../utils/message.js'
+import { checkIncoming } from '../utils/dedup.js'
 import { sendHumanized } from '../utils/humanize.js'
 import { generateReply } from '../models/chatService.js'
-import { extractFacts } from '../models/memory.js'
+import { extractFacts, addFact, flushMemory } from '../models/memory.js'
 
 /**
  * 伪人模式主入口。
@@ -51,6 +52,17 @@ export class Bym extends plugin {
     if (!config.enabled) return
 
     const text = messageToText(e)
+
+    // 去重与回声守卫。必须放在任何有副作用的动作之前（冷却记账、调模型），
+    // 否则重复消息会各自消耗一次配额，把本该留给真实消息的额度吃掉。
+    if (config.dedup?.enable !== false) {
+      const { dup } = checkIncoming(e, text)
+      if (dup) {
+        globalThis.logger?.debug?.(`[bym] 跳过：重复消息（${dup}）`)
+        return
+      }
+    }
+
     const decision = evaluate(e, text)
 
     if (!decision.pass) {
@@ -59,25 +71,51 @@ export class Bym extends plugin {
       return
     }
 
-    // 关键词命中默认仍然受冷却约束：否则一个热词就能让机器人刷屏
-    const bypassCooldown = decision.forced && config.trigger.bypassCooldownOnKeyword === true
+    // 冷却豁免有三档，优先级从高到低：
+    // 被点名（默认豁免）/ 关键词（默认不豁免）/ 概率（从不豁免）。
+    // 三档都绕不过 maxPerHour —— 那是防刷屏的底线，被 @ 十次也不该回十条。
+    const bypassCooldown = (decision.addressed && config.trigger.addressedBypassCooldown !== false) ||
+      (decision.forced && !decision.addressed && config.trigger.bypassCooldownOnKeyword === true)
     const rate = checkRate(e.group_id, { bypassCooldown })
     if (!rate.ok) {
       globalThis.logger?.debug?.(`[bym] 跳过：${rate.reason}`)
       return
     }
 
-    // 先记账再请求：模型响应可能耗时数秒，期间同群的新消息不应再触发一次
-    markSpoken(e.group_id)
-    globalThis.logger?.info?.(`[bym] 触发（${decision.forced ? '关键词' : '概率'}），群 ${e.group_id}，来自 ${displayName(e)}`)
+    // 先记账再请求：模型响应可能耗时数秒，期间同群的新消息不应再触发一次。
+    // token 要留着 —— 如果最终没说话（比如被语义把关拒掉），得按它精确退还。
+    const spendToken = markSpoken(e.group_id)
+    const how = decision.addressed ? '被点名' : (decision.forced ? '关键词' : '概率')
+    globalThis.logger?.info?.(`[bym] 触发（${how}），群 ${e.group_id}，来自 ${displayName(e)}`)
 
     let reply
     try {
-      reply = await generateReply(e, { text, forced: decision.forced })
+      reply = await generateReply(e, { text, forced: decision.forced, addressed: decision.addressed })
     } catch (err) {
       globalThis.logger?.error?.(`[bym] 生成失败：${err.message}`)
       return
     }
+
+    if (reply?.skipped) {
+      // 语义把关判了「这时候不该插话」。配额要退回去 ——
+      // 那次调用是决策成本，不该算作用掉一次发言机会。
+      // 带 token 退，否则并发时会退掉别人刚记的那次。
+      refundSpoken(e.group_id, spendToken)
+      globalThis.logger?.debug?.(`[bym][gate] 本轮不接话（${reply.skipReason || '评分不足'}），配额已退还`)
+      return
+    }
+
+    if (reply?.blocked) {
+      // 这里只记日志。群里不解释、不道歉、不发错误提示 ——
+      // 伪人不说话是常态，但一旦开口解释"我刚才不该说那句话"就彻底破功了。
+      globalThis.logger?.warn?.(`[bym][guard] 本轮已拦截（${reply.blockedReason}），群 ${e.group_id}`)
+      return
+    }
+
+    // 记忆先落库，再管发不发得出去。
+    // 记忆和「这一轮要不要说话」是两件事：模型只给了 memory 没给 say 时，
+    // 正文确实不能发，但那条记忆是真的。
+    saveMemory(e, reply, text)
 
     if (!reply?.text) {
       globalThis.logger?.debug?.('[bym] 模型返回空内容，放弃发送')
@@ -86,25 +124,56 @@ export class Bym extends plugin {
 
     await sendHumanized(e, reply.text, { recallSeconds: reply.preset?.recallSeconds })
     globalThis.logger?.debug?.(`[bym] 已发送（模式 ${reply.mode}，人设 ${reply.preset?.id}，模型 ${reply.model}）`)
-
-    // 记忆抽取完全异步，失败不影响已经发出的消息
-    if (config.memory.enable && config.memory.extract) {
-      // 群上下文里已经有这轮之前的对话，补上当前这条再抽取，样本更完整
-      const lines = (reply.contextItems || []).map(item => ({
-        name: item.name,
-        userId: item.userId,
-        text: item.text,
-      }))
-      lines.push({ name: displayName(e), userId: String(e.user_id || ''), text })
-
-      // 语料只来自群上下文。context.enable 关着时这里永远只有 1 条，
-      // 抽取会被「至少 6 条」的门槛挡掉。把原因写清楚，否则用户会以为记忆坏了。
-      if (lines.length < 6) {
-        globalThis.logger?.debug?.(`[bym][memory] 跳过抽取：可用语料 ${lines.length} 条（开启 context.enable 才会积累群记忆）`)
-      }
-      extractFacts(e.group_id, lines).catch(err => {
-        globalThis.logger?.warn?.(`[bym][memory] 抽取失败：${err.message}`)
-      })
-    }
   }
+}
+
+/**
+ * 落库这一轮的记忆。
+ *
+ * 抽出来是为了能**在正文判空之前调用** —— 模型偶尔只返回 memory 不给 say
+ * （契约要求两样，它只给了一样），那种情况下正文发不出去，但记忆是有效的。
+ * 之前这段代码在 `if (!reply.text) return` 后面，导致 replyParser 特意收下的
+ * 记忆被上游悄悄丢掉：测试绿了，功能却没生效。
+ */
+function saveMemory (e, reply, text) {
+  if (!config.memory.enable || config.memory.extract === false) return
+
+  // 优先用回复里顺带产出的条目（零额外调用）
+  if (reply.memory?.length) {
+    // deferred + 最后统一 flush：一次回复最多 5 条，逐条 flush 就是 5 次
+    // 全量序列化 + 5 次写文件，完全没必要。
+    let saved = 0
+    for (const item of reply.memory) {
+      if (addFact(e.group_id, {
+        fact: item.fact,
+        topic: '对话',
+        // importance 来自模型（契约里可选），没给就是 0.5。
+        // 这一维直接影响 queryFacts 的排序，全填同一个值等于没填。
+        importance: item.importance,
+        deferred: true,
+      })) saved += 1
+    }
+    if (saved > 0) flushMemory()
+    globalThis.logger?.debug?.(`[bym][memory] 从回复中记录 ${saved} 条（去重后）`)
+    return
+  }
+
+  // 模型没按契约来（小模型常见）时退回独立抽取。那条路要多一次调用，只作兜底。
+  if (!reply.memoryDegraded) return
+
+  const lines = (reply.contextItems || []).map(item => ({
+    name: item.name,
+    userId: item.userId,
+    text: item.text,
+  }))
+  lines.push({ name: displayName(e), userId: String(e.user_id || ''), text })
+
+  // 语料只来自群上下文。context.enable 关着时这里永远只有 1 条，
+  // 抽取会被「至少 6 条」的门槛挡掉。把原因写清楚，否则用户会以为记忆坏了。
+  if (lines.length < 6) {
+    globalThis.logger?.debug?.(`[bym][memory] 跳过抽取：可用语料 ${lines.length} 条（开启 context.enable 才会积累群记忆）`)
+  }
+  extractFacts(e.group_id, lines).catch(err => {
+    globalThis.logger?.warn?.(`[bym][memory] 抽取失败：${err.message}`)
+  })
 }

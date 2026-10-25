@@ -51,6 +51,11 @@ const DEFAULTS = {
     maxPerHour: 6,
     // 关键词命中时是否无视冷却。默认 false：热词不该变成刷屏开关
     bypassCooldownOnKeyword: false,
+    // @ 机器人时必定接话。关掉不表示「@ 了也不理」，而是退回按关键词/概率判断
+    replyWhenAddressed: true,
+    // 被 @ 时无视冷却。默认开：名字都叫了还不应，比偶尔插错话难解释得多。
+    // 注意它绕不过 maxPerHour —— 那是防刷屏的底线
+    addressedBypassCooldown: true,
     // 忽略 @ 了别人的消息（避免抢答）
     ignoreAtOthers: true,
     // 忽略以指令前缀开头的消息
@@ -85,6 +90,35 @@ const DEFAULTS = {
     gapDelay: { minMs: 300, maxMs: 1200 },
   },
 
+  guard: {
+    // 出站拦截：模型回复里出现自曝身份/厂商/内部实现时不发出去。
+    // 提示词拦不住的，这一层兜。强烈建议保持开启。
+    enable: true,
+    // 二次判定用的模型，留空则只用本地规则。
+    // 本地规则只拦「作为 AI 语言模型」这类无歧义句式；
+    // 配了这里，才会把「出现 Claude/GPT 等词」的可疑句交模型判一次（多一次调用）。
+    judgeModel: '',
+    // 命中后是否重试一次（会多一次模型调用）。默认不重试，直接丢弃这一轮。
+    // 开着的坏处是偶尔让发言延迟翻倍，好处是不浪费一次触发机会。
+    retry: false,
+  },
+
+  dedup: {
+    // 入口去重与回声守卫。关掉只在你有其他层拦重投时才考虑。
+    enable: true,
+  },
+
+  gate: {
+    // 语义把关：概率筛过之后，让模型再判一次「这时候插话合不合适」。
+    // 默认关 —— 每条命中的消息都要多一次 API 调用，成本随 probability 线性增长。
+    // 开启后概率之外的粗略判断（在吵架、在刷广告、在自言自语）才会被挡掉。
+    enable: false,
+    // 判定模型，留空复用 llm.model。建议填个便宜的小模型
+    model: '',
+    // 0-10 分的阈值，低于此分不接话
+    threshold: 6,
+  },
+
   llm: {
     // OpenAI 兼容端点，会拼成 {baseURL}/chat/completions
     baseURL: 'https://api.openai.com/v1',
@@ -111,6 +145,9 @@ const DEFAULTS = {
     enable: true,
     // 拉取条数
     length: 20,
+    // 上下文总字数预算。超了按「记忆 → 群记录（从最早的开始）→ 本轮消息」的顺序丢，
+    // 人设永不裁。0 或留空用内置默认 8000
+    maxChars: 8000,
     // 群历史缓存（秒），0 关闭。开启后缓存期内新消息不会进入上下文
     cacheTTL: 0,
     // 头部模板
@@ -137,9 +174,10 @@ const DEFAULTS = {
     enable: false,
     // 每群注入最近/最相关的事实条数
     injectLimit: 5,
-    // 是否用模型自动抽取记忆
+    // 是否记录记忆。开启后记忆由回复顺带产出（模型同时返回 {say, memory}），
+    // 不额外调用接口
     extract: true,
-    // 抽取用模型，留空复用 llm.model
+    // 回退抽取用模型。只在模型没按契约返回时才会用到，留空复用 llm.model
     extractModel: '',
     // 每群最多保留多少条事实
     maxFactsPerGroup: 200,
@@ -157,11 +195,18 @@ function clone (value) {
 }
 
 /**
- * 用默认值补齐用户配置里缺失的键（不覆盖用户已有值）。
+ * 用默认值补齐用户配置里缺失的键，并修正明显写错的类型（不覆盖用户已有值）。
  *
- * 注意「键存在但值不是对象」的情况：YAML 里把子项全注释掉只剩一个
- * `llm:`，读进来就是 null。此时必须用默认值覆盖，否则后续访问
- * config.llm.baseURL 会抛 TypeError。
+ * 两类「键存在但类型不对」必须在这里处理掉，否则会在运行时炸出更难懂的错：
+ *
+ * 1. **对象段写成空**：YAML 里把子项全注释掉只剩一个 `llm:`，读进来是 `null`。
+ *    不处理的话 `config.llm.baseURL` 抛 `Cannot read properties of null`。
+ * 2. **数组写成标量**：`groups: 123456`（YAML 不需要引号也能解析成数字）。
+ *    不处理的话 `(groups || []).map` 抛 `is not a function` —— 而这行在
+ *    `precheck()` 里，等于**每条群消息都崩**，报错还指不到是哪个配置项。
+ *
+ * 数组的修法刻意不是「丢弃用默认值」，而是**包成单元素数组**：
+ * 用户写了 `groups: 123456` 的意思就是「这个群」，包起来才符合原意。
  *
  * @returns {boolean} 是否有改动（有则需要回写文件）
  */
@@ -169,11 +214,28 @@ function fillDefaults (target, defaults) {
   let changed = false
   for (const [key, defValue] of Object.entries(defaults)) {
     const current = target[key]
-    if (!(key in target) || (isPlainObject(defValue) && !isPlainObject(current))) {
+
+    if (!(key in target)) {
       target[key] = clone(defValue)
       changed = true
       continue
     }
+
+    if (Array.isArray(defValue) && !Array.isArray(current)) {
+      // null / undefined / 空串视为「没填」，用默认值；其余标量包成单元素数组
+      const empty = current === null || current === undefined || current === ''
+      target[key] = empty ? clone(defValue) : [current]
+      changed = true
+      globalThis.logger?.warn?.(`[bym] 配置项 ${key} 应为数组，已自动修正为 ${JSON.stringify(target[key])}`)
+      continue
+    }
+
+    if (isPlainObject(defValue) && !isPlainObject(current)) {
+      target[key] = clone(defValue)
+      changed = true
+      continue
+    }
+
     if (isPlainObject(defValue)) {
       if (fillDefaults(current, defValue)) changed = true
     }
@@ -194,6 +256,9 @@ class BymConfig {
    * 读取配置。优先 config.yaml，其次 config.json，都没有则生成一份 yaml。
    */
   load () {
+    // 配置目录也要建：BYM_CONFIG_DIR 指到一个还不存在的目录时，
+    // 少这一行会让首次写入静默失败（save 的 catch 只打日志，进程继续跑）。
+    fs.mkdirSync(configDir, { recursive: true })
     fs.mkdirSync(dataDir, { recursive: true })
     fs.mkdirSync(presetDir, { recursive: true })
 
@@ -264,11 +329,6 @@ class BymConfig {
   }
 
   /** 便捷读取：cfg.bym('trigger.probability', 0.1) */
-  get (keyPath, fallback) {
-    const value = String(keyPath).split('.').reduce((acc, key) => (acc == null ? acc : acc[key]), this.data)
-    return value === undefined ? fallback : value
-  }
-
   set (keyPath, value) {
     const keys = String(keyPath).split('.')
     const last = keys.pop()
@@ -301,14 +361,25 @@ class BymConfig {
     return this.save()
   }
 
-  // 常用段落的快捷访问器
-  get trigger () { return this.data.trigger }
-  get speaking () { return this.data.speaking }
-  get llm () { return this.data.llm }
-  get context () { return this.data.context }
-  get vision () { return this.data.vision }
-  get memory () { return this.data.memory }
   get enabled () { return this.data.enable === true }
+}
+
+/**
+ * 配置段访问器。
+ *
+ * 不在类里逐个写 `get xxx ()`，是因为踩过坑：新增配置段时忘了加 getter，
+ * `config.guard` 就是 undefined，所有 `config.guard?.xxx` 都静默走了默认分支 ——
+ * 表现为「开关怎么改都没反应」，而且不报错、日志里也看不出来。
+ *
+ * 现在集中在这里注册，配合 tests/config.mjs 里的断言：
+ * schema 里出现的每个段都必须能通过 config[段名] 访问到。
+ */
+for (const section of ['trigger', 'speaking', 'guard', 'dedup', 'gate', 'llm', 'context', 'vision', 'memory']) {
+  Object.defineProperty(BymConfig.prototype, section, {
+    get () { return this.data[section] },
+    enumerable: true,
+    configurable: true,
+  })
 }
 
 export const config = new BymConfig()

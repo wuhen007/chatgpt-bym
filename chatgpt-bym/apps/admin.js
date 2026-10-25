@@ -54,6 +54,9 @@ export class BymAdmin extends plugin {
       `冷却：${config.trigger.cooldownSeconds} 秒 / 每小时上限 ${config.trigger.maxPerHour} 次`,
       `发言方式：${config.speaking.mode}，分段 ${config.speaking.splitReplies ? '开' : '关'}，撤回 ${config.speaking.recallSeconds || 0} 秒`,
       `群上下文：${config.context.enable ? `${config.context.length} 条` : '关闭'}，记忆：${config.memory.enable ? '开' : '关'}`,
+      `守卫：自曝拦截${config.guard?.enable === false ? '关' : '开'}` +
+        `，语义把关${config.gate?.enable ? `开（阈值 ${config.gate.threshold}）` : '关'}` +
+        `，去重${config.dedup?.enable === false ? '关' : '开'}`,
       `预设（${presets.size}）：${[...presets.keys()].join('、') || '无，将使用内置人设'}`,
     ]
     if (rate) {

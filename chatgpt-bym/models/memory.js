@@ -131,7 +131,20 @@ export function buildMemoryPrompt (groupId, queryText, limit = config.memory.inj
 }
 
 /** 写入一条事实，做长度截断与近似去重 */
-export function addFact (groupId, { fact, topic = '', importance = 0.4 }) {
+/**
+ * 写入一条群事实。
+ *
+ * @param {string} groupId
+ * @param {object} options
+ * @param {string} options.fact
+ * @param {string} [options.topic]
+ * @param {number} [options.importance]
+ * @param {boolean} [options.deferred] 跳过落盘。批量写入时用它，
+ *   全部写完由调用方 `flushMemory()` 一次落盘 —— `flush()` 每次都对整份
+ *   store 做 `JSON.stringify` 再写文件，一轮回复产出 5 条就是 5 次全量序列化。
+ * @returns {boolean} 是否真的写入了（重复或空内容返回 false）
+ */
+export function addFact (groupId, { fact, topic = '', importance = 0.4, deferred = false }) {
   const text = String(fact || '').replace(/\s+/g, ' ').trim().slice(0, MAX_FACT_LENGTH)
   if (!text) return false
   const bucket = groupBucket(groupId, true)
@@ -157,8 +170,16 @@ export function addFact (groupId, { fact, topic = '', importance = 0.4 }) {
     bucket.facts.sort((a, b) => (Number(b.importance) || 0) - (Number(a.importance) || 0) || b.at - a.at)
     bucket.facts = bucket.facts.slice(0, max)
   }
-  flush()
+  if (!deferred) flush()
   return true
+}
+
+/**
+ * 手动落盘。批量写入（`deferred: true`）之后调一次即可。
+ * @returns {Promise<void>}
+ */
+export function flushMemory () {
+  return flush()
 }
 
 /** 给抽取用的模型看的历史片段 */

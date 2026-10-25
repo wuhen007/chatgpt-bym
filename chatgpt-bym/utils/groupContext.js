@@ -153,10 +153,10 @@ export async function fetchGroupHistory (e, length) {
  */
 export async function buildGroupContext (e) {
   const ctx = config.context
-  if (!ctx.enable) return { header: '', text: '', items: [] }
+  if (!ctx.enable) return { header: '', text: '', items: [], lines: [] }
 
   const chats = await fetchGroupHistory(e, ctx.length)
-  if (chats.length === 0) return { header: '', text: '', items: [] }
+  if (chats.length === 0) return { header: '', text: '', items: [], lines: [] }
 
   const groupId = String(e?.group_id || e?.group?.group_id || 'unknown')
   const groupName = e?.group?.name || e?.group_name || 'unknown'
@@ -195,8 +195,9 @@ export async function buildGroupContext (e) {
     })
   }
 
-  if (lines.length === 0) return { header: '', text: '', items: [] }
-  return { header, text: [header, ...lines].join('\n'), items }
+  if (lines.length === 0) return { header: '', text: '', items: [], lines: [] }
+  // 另外把 lines 单独给出去：预算裁剪要按条丢，直接切 text 会把表头切坏
+  return { header, text: [header, ...lines].join('\n'), items, lines }
 }
 
 export function clearContextCache () {

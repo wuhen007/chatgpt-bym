@@ -157,13 +157,25 @@ export function supportGuoba () {
         {
           field: 'trigger.bypassCooldownOnKeyword',
           label: '关键词无视冷却',
-          bottomHelpMessage: '开启后必触发关键词不再受冷却和上限约束，慎用（容易被刷屏）',
+          bottomHelpMessage: '开启后必触发关键词不再受冷却约束（每小时上限仍然生效，那是防刷屏的底线）',
+          component: 'Switch',
+        },
+        {
+          field: 'trigger.replyWhenAddressed',
+          label: '@ 机器人时必定接话',
+          bottomHelpMessage: '关闭不表示「@ 了也不理」，而是退回按关键词和概率判断',
+          component: 'Switch',
+        },
+        {
+          field: 'trigger.addressedBypassCooldown',
+          label: '被 @ 时无视冷却',
+          bottomHelpMessage: '名字都叫了还不应，比偶尔插错话更难解释。同样绕不过每小时上限',
           component: 'Switch',
         },
         {
           field: 'trigger.ignoreAtOthers',
           label: '不接 @ 别人的话',
-          bottomHelpMessage: '消息里 @ 了其他人时视为定向对话，不插嘴',
+          bottomHelpMessage: '消息里 @ 了其他人时视为定向对话，不插嘴。同时 @ 了机器人的除外',
           component: 'Switch',
         },
         {
@@ -291,8 +303,60 @@ export function supportGuoba () {
         {
           field: 'speaking.gapDelay.maxMs',
           label: '多条间隔上限（毫秒）',
+          bottomHelpMessage: '分多条发送时，两条之间最多停顿多久',
           component: 'InputNumber',
           componentProps: { min: 0, max: 30000, step: 100 },
+        },
+
+        // ──────────────────────── 安全与去重 ────────────────────────
+        { label: '防自曝与去重', component: 'SOFT_GROUP_BEGIN' },
+        {
+          field: 'guard.enable',
+          label: '拦截自曝回复',
+          bottomHelpMessage: '回复里出现「我是 AI」「我的训练数据」这类话时，这一轮不发。强烈建议保持开启',
+          component: 'Switch',
+        },
+        {
+          field: 'guard.judgeModel',
+          label: '自曝判定模型',
+          bottomHelpMessage: '留空则只用本地规则。填了之后，出现 Claude / GPT 等可疑词时会多调一次廉价模型判定是否真在自曝',
+          component: 'Input',
+          componentProps: { placeholder: '留空表示不启用二次判定，例如 gpt-4o-mini' },
+        },
+        {
+          field: 'guard.retry',
+          label: '命中后重试一次',
+          bottomHelpMessage: '开启则不直接丢弃，而是带着强约束再问一次模型（多一次请求，回复可能变慢）',
+          component: 'Switch',
+        },
+        {
+          field: 'dedup.enable',
+          label: '重复消息去重',
+          bottomHelpMessage: '挡住协议端重投的重复消息，以及机器人自己消息绕回来导致的「我回我自己」死循环',
+          component: 'Switch',
+        },
+
+        // ──────────────────────── 语义把关（可选）────────────────────────
+        { label: '语义把关（进阶）', component: 'SOFT_GROUP_BEGIN' },
+        {
+          field: 'gate.enable',
+          label: '让模型判断该不该插话',
+          bottomHelpMessage: '概率命中后再多问一次模型。能挡掉「在吵架」「在刷广告」「在自言自语」这些不该插嘴的场合，代价是每条命中的消息多一次调用',
+          component: 'Switch',
+        },
+        {
+          field: 'gate.model',
+          label: '判定模型',
+          bottomHelpMessage: '留空复用上面的主模型。建议填个便宜的小模型',
+          component: 'Input',
+          componentProps: { placeholder: '留空表示同主模型，例如 gpt-4o-mini' },
+        },
+        {
+          field: 'gate.threshold',
+          label: '接话分数线（0-10）',
+          bottomHelpMessage: '低于这个分数不接话。6 表示「日常闲聊及以上」，调高会明显减少发言',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 10, step: 1 },
         },
 
         // ─────────────────────────── 接口 ───────────────────────────
@@ -399,6 +463,13 @@ export function supportGuoba () {
           componentProps: { min: 1, max: 100 },
         },
         {
+          field: 'context.maxChars',
+          label: '上下文字数上限',
+          bottomHelpMessage: '超过后按「记忆 → 群记录（从最早的丢）→ 本轮消息」的顺序裁剪，人设永不裁。默认 8000',
+          component: 'InputNumber',
+          componentProps: { min: 500, max: 100000, step: 500 },
+        },
+        {
           field: 'context.cacheTTL',
           label: '历史缓存（秒）',
           bottomHelpMessage: '0 为关闭。开启后能省请求，但缓存期内新消息进不去',
@@ -481,8 +552,8 @@ export function supportGuoba () {
         },
         {
           field: 'memory.extractModel',
-          label: '抽取用模型',
-          bottomHelpMessage: '留空则复用上面的模型名称。建议用便宜的小模型',
+          label: '回退抽取用模型',
+          bottomHelpMessage: '正常情况下用不到：记忆是回复时顺带产出的，只有模型没按格式返回时才退回独立抽取。留空则复用上面的模型',
           component: 'Input',
           componentProps: { placeholder: '留空复用' },
         },

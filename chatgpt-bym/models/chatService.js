@@ -4,6 +4,10 @@ import { resolvePreset } from './preset.js'
 import { buildGroupContext, formatTime } from '../utils/groupContext.js'
 import { buildMemoryPrompt } from './memory.js'
 import { buildUserContent, collectImageUrls, collectQuotedImageUrls, displayName } from '../utils/message.js'
+import { guardText } from '../utils/guard.js'
+import { fitBudget, hasDropped } from '../utils/budget.js'
+import { judgeRelevance } from './gate.js'
+import { parseReply, MEMORY_CONTRACT } from './replyParser.js'
 
 /**
  * 一次伪人发言的完整编排：确定人设 -> 拼上下文 -> 调模型 -> 拿到文本。
@@ -29,7 +33,10 @@ function buildSystemPrompt (preset) {
  * 判定本次用哪种发言方式。
  * contextual 依赖群上下文，拿不到上下文时自动退回 reply，否则模型会“凭空发言”。
  */
-export function resolveMode (hasContext) {
+export function resolveMode (hasContext, addressed = false) {
+  // 被点名时必须正面回答。contextual 是「自己找切入点插话」，
+  // 拿它来回答「@机器人 你觉得呢」会答非所问。
+  if (addressed) return 'reply'
   const mode = String(config.speaking.mode || 'reply').toLowerCase()
   if (mode === 'contextual' && hasContext) return 'contextual'
   return 'reply'
@@ -37,7 +44,7 @@ export function resolveMode (hasContext) {
 
 /**
  * @param {object} e 云崽事件
- * @param {{text: string, forced: boolean}} trigger 触发信息
+ * @param {{text: string, forced: boolean, addressed?: boolean}} trigger 触发信息
  * @returns {Promise<{text: string, reasoning: string, mode: string, preset: object, contextItems: Array<object>, model: string}>}
  */
 export async function generateReply (e, trigger) {
@@ -51,7 +58,35 @@ export async function generateReply (e, trigger) {
     collectQuotedImageUrls(e),
   ])
   const hasContext = Boolean(groupContext.text)
-  const mode = resolveMode(hasContext)
+  const mode = resolveMode(hasContext, trigger?.addressed === true)
+
+  // 语义把关：概率筛过之后，再让模型看一眼「这时候插话合不合适」。
+  // 必须排在概率后面 —— 每条消息都判一次是不可接受的成本。
+  // 被点名和命中关键词是明确信号，不浪费这次调用。
+  if (config.gate?.enable === true && trigger?.forced !== true) {
+    const verdict = await judgeRelevance({
+      text: triggerText,
+      context: groupContext.text,
+      speaker: displayName(e),
+      llm: config.llm,
+      chatCompletion,
+      gate: config.gate,
+    })
+    if (!verdict.should) {
+      globalThis.logger?.debug?.(`[bym][gate] 判定不接话：${verdict.why}`)
+      return {
+        text: '',
+        skipped: true,
+        skipReason: verdict.why,
+        gateScore: verdict.score,
+        reasoning: '',
+        mode: 'none',
+        preset,
+        model: '',
+        contextItems: [],
+      }
+    }
+  }
 
   // 记忆检索用“最近在聊什么”当查询词，比用触发词更贴合群聊语境
   const memoryQuery = hasContext
@@ -59,28 +94,63 @@ export async function generateReply (e, trigger) {
     : triggerText
   const memoryPrompt = buildMemoryPrompt(e.group_id, memoryQuery)
 
-  // 动态段：时间 + 记忆。时间放这里而不是 system，是为了让 system 保持静态
-  const dynamicParts = [`当前时间：${formatTime(Date.now())}`]
-  if (!hasContext && config.context.enable) {
-    dynamicParts.push('（没有取到群聊记录，只根据下面这条消息自然地接一句即可）')
+  const systemPrompt = buildSystemPrompt(preset)
+  const contextualPrompt = String(config.speaking.contextualPrompt || '').trim() || '请结合上面的群聊内容，自然地接一句话。'
+  // 被点名叫到的人应该正面接话，而不是像平时那样「顺口插一句」。
+  // 同一条 user 消息里的措辞差别，比在 system 里加一句约束更有效。
+  const lead = trigger?.addressed
+    ? `「${displayName(e)}」在群里直接 @ 了你，请针对下面这句话正面回答：`
+    : `下面这条消息来自「${displayName(e)}」，请自然地接话：`
+
+  // 记忆开启时改成 JSON 契约：回话的同时顺带产出「值得记住的事」，
+  // 省掉原来那次独立的抽取调用（那一轮本来就已经在调模型了）。
+  const wantMemory = config.memory.enable === true && config.memory.extract !== false
+
+  // 预算裁剪。固定的部分（人设 + 指令 + 契约）算进 system，只有正文参与截断，
+  // 这样截出来的永远是消息本身，不会把指令切成半句。
+  //
+  // 契约本身也要算进去：它是裁剪之后才追加的，漏算的话「刚好卡线」的那一轮
+  // 加上 240 多字的契约就超出预算了。
+  const fit = fitBudget({
+    system: systemPrompt + (mode === 'contextual' ? contextualPrompt : lead) + (wantMemory ? MEMORY_CONTRACT : ''),
+    groupHeader: groupContext.header,
+    groupLines: groupContext.lines,
+    memory: memoryPrompt,
+    userText: triggerText,
+    maxChars: config.context.maxChars,
+  })
+  if (hasDropped(fit.dropped)) {
+    globalThis.logger?.debug?.(
+      `[bym][budget] 超出 ${config.context.maxChars} 字，` +
+      `已丢弃：记忆=${fit.dropped.memory ? '是' : '否'}、群记录 ${fit.dropped.groupLines} 条` +
+      `${fit.dropped.truncatedUser ? '、本轮消息被截断' : ''}`
+    )
   }
-  if (memoryPrompt) dynamicParts.push(memoryPrompt)
+
+  // 群记录被裁光时 contextual 就没依据了，退回 reply，否则模型会凭空发言
+  const effectiveMode = (mode === 'contextual' && !fit.groupText) ? 'reply' : mode
+
+  // 只有真正进到 prompt 里的记录才算「这次用到的上下文」，
+  // 记忆抽取拿它当语料，别把已经裁掉的消息也算进去。
+  const usedItems = fit.groupText ? groupContext.items.slice(fit.dropped.groupLines) : []
+
+  // 动态段：时间。放在这里而不是 system，是为了让 system 保持静态（便于 prompt cache）
+  const timeLine = `当前时间：${formatTime(Date.now())}`
 
   const content = []
-  if (hasContext) {
-    content.push({ type: 'text', text: groupContext.text })
+  if (fit.groupText) content.push({ type: 'text', text: fit.groupText })
+  content.push({ type: 'text', text: timeLine })
+  if (!fit.groupText && config.context.enable) {
+    content.push({ type: 'text', text: '（没有取到群聊记录，只根据下面这条消息自然地接一句即可）' })
   }
-  content.push({ type: 'text', text: dynamicParts.join('\n') })
+  if (fit.memory) content.push({ type: 'text', text: fit.memory })
 
-  if (mode === 'contextual') {
-    content.push({
-      type: 'text',
-      text: String(config.speaking.contextualPrompt || '').trim() || '请结合上面的群聊内容，自然地接一句话。',
-    })
+  if (effectiveMode === 'contextual') {
+    content.push({ type: 'text', text: contextualPrompt })
   } else {
     const images = [...currentImages, ...quotedImages]
-    content.push({ type: 'text', text: `下面这条消息来自「${displayName(e)}」，请自然地接话：` })
-    const userContent = await buildUserContent(triggerText, images)
+    content.push({ type: 'text', text: lead })
+    const userContent = await buildUserContent(fit.userText, images)
     if (typeof userContent === 'string') {
       content.push({ type: 'text', text: userContent })
     } else {
@@ -89,8 +159,12 @@ export async function generateReply (e, trigger) {
     }
   }
 
+  // 契约必须排在最后：它是「输出格式要求」，不是上下文的一部分。
+  // 放在中间的话模型容易把它当成需要参考的资料，而不是必须遵守的格式。
+  if (wantMemory) content.push({ type: 'text', text: MEMORY_CONTRACT })
+
   const messages = [
-    { role: 'system', content: buildSystemPrompt(preset) },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content },
   ]
 
@@ -101,16 +175,67 @@ export async function generateReply (e, trigger) {
     maxTokens: Number.isFinite(preset.maxTokens) ? preset.maxTokens : config.llm.maxTokens,
   }
 
+  // 解析一次并清洗。记忆开启时按 JSON 契约解析，解析失败自动退回「整段当回复」。
+  const parseOnce = (raw) => {
+    const parsed = parseReply(raw, { expectMemory: wantMemory })
+    return { ...parsed, text: postProcess(parsed.say) }
+  }
+
   const result = await chatCompletion({ messages, llm })
-  const text = postProcess(result.text)
+  let parsed = parseOnce(result.text)
+  let text = parsed.text
+
+  // 出站守卫：提示词兜不住的自曝，这里兜。
+  // 注意拦掉的是「这一轮不发」，不是「发个错误提示」——伪人不该在群里解释自己为什么不说。
+  let verdict = await guardText(text, { guard: config.guard, chatCompletion, llm })
+
+  if (!verdict.ok && config.guard?.retry === true) {
+    // 重试一次：把命中的原因变成强约束追加到 system 末尾。
+    // 只重复调模型，不重跑群上下文和记忆检索（那些没变）。
+    const reinforce = `\n\n【本轮必须遵守】上一次的回复里出现了不该说的话（${verdict.why || '暴露身份'}）。`
+      + '重新组织一句：绝对不要出现模型名、厂商名、训练/参数/提示词之类的技术细节、本机路径或报错、'
+      + '以及任何「我是 AI / 程序 / 模型 / 助手」的表述。'
+    try {
+      const retryResult = await chatCompletion({
+        messages: [
+          { role: 'system', content: `${messages[0].content}${reinforce}` },
+          messages[1],
+        ],
+        llm,
+      })
+      parsed = parseOnce(retryResult.text)
+      text = parsed.text
+      verdict = await guardText(text, { guard: config.guard, chatCompletion, llm })
+    } catch (err) {
+      globalThis.logger?.warn?.(`[bym][guard] 重试失败，放弃本轮：${err.message}`)
+    }
+  }
+
+  if (!verdict.ok) {
+    globalThis.logger?.warn?.(`[bym][guard] 拦下一句（${verdict.why || '自曝'}${verdict.matched ? `：${verdict.matched}` : ''}）：${String(text).slice(0, 60)}`)
+    return {
+      text: '',
+      blocked: true,
+      blockedReason: verdict.why || '自曝',
+      reasoning: result.reasoning,
+      mode: effectiveMode,
+      preset,
+      model: result.model,
+      contextItems: usedItems,
+    }
+  }
 
   return {
     text,
     reasoning: result.reasoning,
-    mode,
+    mode: effectiveMode,
     preset,
     model: result.model,
-    contextItems: groupContext.items,
+    contextItems: usedItems,
+    // 契约里的记忆条目。开启记忆时由模型顺带产出，不需要额外调用
+    memory: parsed.memory,
+    // 想要记忆但模型没按契约来 —— 调用方可据此决定要不要退回独立抽取
+    memoryDegraded: wantMemory && parsed.degraded,
   }
 }
 

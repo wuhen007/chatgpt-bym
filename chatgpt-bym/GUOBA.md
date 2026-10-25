@@ -124,15 +124,17 @@ GSelectGroup GSelectFriend
 就是插件运行时真正在用的那个单例。所以面板点保存 → 内存立刻变 → 下一条消息就生效，
 **不需要重启，也不经过文件热加载**。
 
-### 3.2 面板结构（8 个分组，60+ 项）
+### 3.2 面板结构（10 个分组，70+ 项）
 
 | 分组 | 字段 |
 |---|---|
 | 基础设置 | `enable`、`commandPrefix` |
-| 触发控制 | `trigger.groupMode`、`groups`、`hitKeywords`、`probability`、`cooldownSeconds`、`maxPerHour`、`bypassCooldownOnKeyword`、`ignoreAtOthers`、`ignoreCommandPrefixes`、`minLength`、`maxLength`、`muteKeywords` |
+| 触发控制 | `trigger.groupMode`、`groups`、`hitKeywords`、`probability`、`cooldownSeconds`、`maxPerHour`、`bypassCooldownOnKeyword`、`replyWhenAddressed`、`addressedBypassCooldown`、`ignoreAtOthers`、`ignoreCommandPrefixes`、`minLength`、`maxLength`、`muteKeywords` |
 | 发言风格 | `speaking.mode`、`contextualPrompt`、`defaultPresetId`、`presetPrefix`、`presetMap`、`recallSeconds`、`splitReplies`、`maxSegmentLength`、`typingDelay.*`、`gapDelay.*` |
+| 防自曝与去重 | `guard.enable`、`guard.judgeModel`、`guard.retry`、`dedup.enable` |
+| 语义把关（进阶） | `gate.enable`、`gate.model`、`gate.threshold` |
 | 模型接口 | `llm.baseURL`、`apiKey`、`model`、`temperature`、`topP`、`maxTokens`、`timeoutMs`、`stream`、`retries`、`extraHeaders`、`extraBody`、`fallback` |
-| 群聊上下文 | `context.enable`、`length`、`cacheTTL`、`header`、`message` |
+| 群聊上下文 | `context.enable`、`length`、`maxChars`、`cacheTTL`、`header`、`message` |
 | 图片识别 | `vision.enable`、`maxImageSize`、`maxImageDimension`、`maxImages`、`includeContextImages` |
 | 群记忆 | `memory.enable`、`injectLimit`、`extract`、`extractModel`、`maxFactsPerGroup` |
 

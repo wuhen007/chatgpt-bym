@@ -9,6 +9,8 @@ trigger:
   cooldownSeconds: 60
   maxPerHour: 6
   bypassCooldownOnKeyword: false
+  replyWhenAddressed: true
+  addressedBypassCooldown: true
   ignoreAtOthers: true
   ignoreCommandPrefixes:
     - '#'
@@ -35,6 +37,16 @@ speaking:
   gapDelay:
     minMs: 300
     maxMs: 1200
+guard:
+  enable: true
+  judgeModel: ''
+  retry: false
+dedup:
+  enable: true
+gate:
+  enable: false
+  model: ''
+  threshold: 6
 llm:
   baseURL: https://api.openai.com/v1
   apiKey: ''
@@ -51,6 +63,7 @@ llm:
 context:
   enable: true
   length: 20
+  maxChars: 8000
   cacheTTL: 0
   header: |-
     <settings>
