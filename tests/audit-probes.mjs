@@ -4,7 +4,7 @@
  * 每个探针都对应审核报告里的一条 finding，跑一遍就能看到现状。
  * 修复后重跑，对应的「结论」行会翻转。
  *
- * 运行：cd chatgpt-bym && node tests/audit-probes.mjs
+ * 运行：node tests/audit-probes.mjs（仓库根就是插件本体，直接在根目录跑）
  *
  * 注意：脚本会创建临时目录，不碰真实的 config/ 和 data/。
  * 只有「C/D 原型污染」两条会短暂修改 Object.prototype，末尾会清掉。
@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const here = import.meta.dirname
-// 这个文件在 chatgpt-bym/tests/ 下，往上一级就是插件根目录
+// 这个文件在 tests/ 下，往上一级就是插件根目录（仓库根）
 const plugin = path.resolve(here, '..')
 const url = p => pathToFileURL(path.join(plugin, p)).href
 

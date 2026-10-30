@@ -55,7 +55,7 @@
 
 1. 模型接口地址，形如 `https://xxx/v1`
 2. API Key
-3. 模型名，如 `gpt-4o-mini`
+3. 模型名，默认 `deepseek-flash`（旧的 deepseek-chat 已于 2026-07 下线）
 4. 允许它说话的群号
 
 ---
@@ -64,19 +64,27 @@
 
 ### 2.1 放入插件目录
 
-把整个 `chatgpt-bym` 目录放到云崽的 `plugins/` 下：
+把整个仓库放进云崽的 `plugins/` 下。**仓库根目录就是插件本体**，不需要再套一层目录：
 
 ```
 Yunzai/
 └── plugins/
-    └── chatgpt-bym/
+    └── chatgpt-bym/          ← clone 下来的目录名
         ├── index.js
         ├── package.json
         ├── apps/
         ├── config/
         ├── models/
         ├── presets/
-        └── utils/
+        ├── utils/
+        └── tests/
+```
+
+推荐直接 clone：
+
+```bash
+cd Yunzai/plugins
+git clone <本仓库地址> chatgpt-bym
 ```
 
 **目录名可以改**：插件内部所有路径都由 `import.meta.url` 推导，不依赖目录叫什么。
@@ -116,7 +124,11 @@ cd Yunzai
 node .
 ```
 
-第一次启动会在 `plugins/chatgpt-bym/config/` 下生成 `config.yaml`，里面是全部默认值。
+第一次启动会生成 `config.yaml`，里面是全部默认值。
+
+> **1.4.1 起配置不在插件目录里**：正常是 `Yunzai/data/chatgpt-bym/config.yaml`（宿主的 data 目录）。
+> 只有在检测不到云崽（不在 `plugins/` 布局下、或宿主 `package.json` 的 name 不含 yunzai）时，
+> 才退回插件目录 `plugins/chatgpt-bym/config/`。日志里会写明用的是哪一个。
 
 启动日志里应该出现：
 
@@ -131,7 +143,7 @@ node .
 
 ### 2.4 填最小配置
 
-打开 `plugins/chatgpt-bym/config/config.yaml`，至少改这四处：
+打开 `data/chatgpt-bym/config.yaml`（在插件目录里配置时是 `plugins/chatgpt-bym/config/config.yaml`），至少改这四处：
 
 ```yaml
 enable: true                     # 总开关
@@ -143,9 +155,9 @@ trigger:
   probability: 0.02              # 其他消息 2% 概率接话
 
 llm:
-  baseURL: https://api.openai.com/v1
-  apiKey: sk-xxxx                # 你的 key
-  model: gpt-4o-mini
+  baseURL: https://api.deepseek.com   # 或任何 OpenAI 兼容端点
+  apiKey: sk-xxxx                    # 你的 key
+  model: deepseek-flash
 ```
 
 保存即可，配置会自动热加载（约 1 秒内生效），**不需要重启**。
@@ -221,9 +233,9 @@ llm:
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `baseURL` | `https://api.openai.com/v1` | 写 `.../v1`、`...`、或完整 `.../v1/chat/completions` 都行，会自动归一化 |
+| `baseURL` | `https://api.deepseek.com` | 写 `.../v1`、`...`、或完整 `.../v1/chat/completions` 都行，会自动归一化 |
 | `apiKey` | `''` | 会拼成 `Authorization: Bearer <key>` |
-| `model` | `gpt-4o-mini` | |
+| `model` | `deepseek-flash` | 旧的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07 下线 |
 | `temperature` | `0.9` | 伪人建议 0.8~1.0 |
 | `topP` | `1` | |
 | `maxTokens` | `300` | 太长会变成小作文，300 大约 2~3 句 |
@@ -726,9 +738,9 @@ speaking:
   maxSegmentLength: 120
 
 llm:
-  baseURL: https://api.openai.com/v1
+  baseURL: https://api.deepseek.com
   apiKey: sk-你的key
-  model: gpt-4o-mini
+  model: deepseek-flash
   temperature: 0.9
   maxTokens: 300
 

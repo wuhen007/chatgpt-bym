@@ -118,7 +118,7 @@ GSelectGroup GSelectFriend
 
 ### 3.1 文件
 
-`chatgpt-bym/guoba.support.js`，导出 `supportGuoba()`。
+仓库根的 `guoba.support.js`，导出 `supportGuoba()`。
 
 因为**锅巴与云崽跑在同一个进程**，这里 `import { config } from './config/config.js'` 拿到的
 就是插件运行时真正在用的那个单例。所以面板点保存 → 内存立刻变 → 下一条消息就生效，
@@ -173,7 +173,7 @@ setPath(form, 'trigger.groups', config.data.trigger.groups.join('\n'))
 
 ```js
 config.apply({
-  'llm.model': 'gpt-4o-mini',
+  'llm.model': 'deepseek-flash',
   'trigger.groups': ['111'],
 })
 ```
@@ -221,7 +221,7 @@ config.apply({
 | 字段 | 格式 |
 |---|---|
 | `speaking.presetMap` | `[{"keywords":["原神"],"presetId":"bym_tsundere","priority":10}]` |
-| `llm.fallback` | `[{"baseURL":"https://backup/v1","apiKey":"sk-...","model":"gpt-4o-mini"}]` |
+| `llm.fallback` | `[{"baseURL":"https://backup/v1","apiKey":"sk-...","model":"deepseek-flash"}]` |
 | `llm.extraHeaders` | `{"X-Custom":"value"}` |
 | `llm.extraBody` | `{"enable_thinking":false}` |
 

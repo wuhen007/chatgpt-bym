@@ -55,7 +55,7 @@ sim-lab/
 │   ├── run.js                   # 业务层 26 个用例
 │   ├── ws.js                    # 协议层 7 个用例
 │   └── debug-recall.js          # 撤回行为的隔离验证
-└── sync.mjs                     # 从 ../../chatgpt-bym 同步源码
+└── sync.mjs                     # 从 ../../（仓库根即插件本体）同步源码
 ```
 
 > 插件里 `import plugin from '../../../lib/plugins/plugin.js'` 是相对路径，所以仿真必须还原「`plugins/<插件>/apps/*.js`」这个物理布局，桩文件才能被解析到。这也是为什么不能直接把插件目录软链到别处。
@@ -243,7 +243,7 @@ G2.9 证实了这条链路：`group.yaml` 的 `onlyReplyAt` 只要不是 0，TRS
 
 ```bash
 cd sim-lab
-node sync.mjs          # 把 ../../chatgpt-bym 的最新源码同步进来
+node sync.mjs          # 把 ../../（仓库根即插件本体）的最新源码同步进来
 node sim/ws.js         # 协议层 7 项
 node sim/run.js        # 业务层 26 项（退出码非 0 表示有差异）
 node sim/debug-recall.js   # 撤回行为隔离验证

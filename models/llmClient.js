@@ -25,8 +25,8 @@ function normalizeBase (baseURL) {
   return String(baseURL || '').trim().replace(/\/+$/, '')
 }
 
-/** 允许用户把 baseURL 写成完整端点 */
-function endpointOf (baseURL) {
+/** 允许用户把 baseURL 写成完整端点。导出供测试。 */
+export function endpointOf (baseURL) {
   const base = normalizeBase(baseURL)
   if (/\/(chat\/completions|completions)$/.test(base)) return base
   if (/\/v\d+$/.test(base)) return `${base}/chat/completions`

@@ -2,12 +2,12 @@
 node_modules/
 
 # 运行时数据（含群记忆，可能涉及隐私）
-chatgpt-bym/data/
+data/
 *.log
 
 # 用户自己的配置（可能含真实 API Key），只提交 config.example.yaml
-chatgpt-bym/config/config.yaml
-chatgpt-bym/config/config.json
+config/config.yaml
+config/config.json
 
 # 本地参考源码：上游项目与第三方仓库，不随本仓库分发
 .ref/

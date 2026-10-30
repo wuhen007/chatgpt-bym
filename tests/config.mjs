@@ -31,7 +31,24 @@ let pass = 0
 let fail = 0
 function test (name, fn) {
   try {
-    fn()
+    const ret = fn()
+    // 异步用例传进来会「假通过」：fn() 返回 Promise，try 块里的断言失败
+    // 变成 unhandled rejection，而这里已经先记成通过了。当场拦下来。
+    if (ret && typeof ret.then === 'function') {
+      throw new Error('这是异步用例，请改用 await testAsync(...)')
+    }
+    pass++
+    console.log('  ok  ' + name)
+  } catch (err) {
+    fail++
+    console.log('  FAIL ' + name + '\n       ' + err.message)
+  }
+}
+
+/** 异步版本的 test。必须 await，否则统计不到。 */
+async function testAsync (name, fn) {
+  try {
+    await fn()
     pass++
     console.log('  ok  ' + name)
   } catch (err) {
@@ -55,7 +72,6 @@ function walk (dir, out = []) {
   }
   return out
 }
-
 console.log('\n[1] DEFAULTS 的每个配置段都能访问')
 // 只查对象类型的段：标量键（enable / commandPrefix）直接用 config.data.xxx，
 // 没有也不需要有同名访问器。
@@ -69,10 +85,21 @@ for (const section of Object.keys(config.data)) {
 
 console.log('\n[2] 源码里用到的每个 config.xxx 都真实存在')
 const root = path.resolve(import.meta.dirname, '..')
+// 只扫插件自己的源码。仓库根同时放着开发环境（sim-lab/、.ref/）和上游项目
+// （chatgpt-plugin/），那些代码里的 config.xxx 属于别的配置体系，
+// 扫进来会报出一堆「缺访问器」的假失败。
+const SRC_ENTRIES = ['index.js', 'guoba.support.js', 'apps', 'models', 'utils', 'config']
+const srcFiles = []
+for (const name of SRC_ENTRIES) {
+  const full = path.join(root, name)
+  if (!fs.existsSync(full)) continue
+  if (fs.statSync(full).isDirectory()) srcFiles.push(...walk(full))
+  else srcFiles.push(full)
+}
 // 文件名里的 config.yaml / config.json 也会被正则抓到，按扩展名排除
 const FILE_EXTS = new Set(['yaml', 'yml', 'json', 'js', 'mjs', 'md', 'example', 'tmp', 'bak', 'log', 'db', 'lock', 'ts'])
 const used = new Set()
-for (const file of walk(root)) {
+for (const file of srcFiles) {
   const src = fs.readFileSync(file, 'utf8')
   // 跳过注释行里的用法，避免误报
   for (const line of src.split('\n')) {
@@ -103,13 +130,30 @@ test('guard.retry 默认 false（不额外多一次请求）', () => {
 test('dedup.enable 默认 true', () => {
   assert.equal(config.dedup.enable, true)
 })
+test('默认接口与模型指向 DeepSeek', () => {
+  // 新装用户只有这两项是「猜对的」，写错就跑不起来。
+  // 锁住是为了改默认值时能立刻发现，不是怕别人改。
+  assert.equal(config.llm.baseURL, 'https://api.deepseek.com')
+  assert.equal(config.llm.model, 'deepseek-flash')
+})
+await testAsync('默认端点在 llmClient 里补成 /v1/chat/completions', async () => {
+  const { endpointOf } = await import('../models/llmClient.js')
+  // 三种写法都要归一到同一个端点：这是用户填地址时最容易出错的地方
+  assert.equal(endpointOf('https://api.deepseek.com'), 'https://api.deepseek.com/v1/chat/completions')
+  assert.equal(endpointOf('https://api.deepseek.com/'), 'https://api.deepseek.com/v1/chat/completions')
+  assert.equal(endpointOf('https://api.deepseek.com/v1'), 'https://api.deepseek.com/v1/chat/completions')
+  assert.equal(
+    endpointOf('https://api.deepseek.com/v1/chat/completions'),
+    'https://api.deepseek.com/v1/chat/completions'
+  )
+})
 test('set 能一路写到新段里', () => {
   config.set('guard.enable', false)
   assert.equal(config.guard.enable, false)
   config.set('guard.enable', true)
   assert.equal(config.guard.enable, true)
 })
-test('落盘后重新解析，新段还在', async () => {
+await testAsync('落盘后重新解析，新段还在', async () => {
   const raw = fs.readFileSync(path.join(process.env.BYM_CONFIG_DIR, 'config.yaml'), 'utf8')
   assert.match(raw, /^guard:/m)
   assert.match(raw, /^dedup:/m)

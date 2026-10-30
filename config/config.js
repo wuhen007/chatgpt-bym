@@ -208,10 +208,18 @@ const DEFAULTS = {
   },
 
   llm: {
-    // OpenAI 兼容端点，会拼成 {baseURL}/chat/completions
-    baseURL: 'https://api.openai.com/v1',
+    // OpenAI 兼容端点。补全规则见 llmClient 的 endpointOf：
+    //   带 /chat/completions 结尾 → 原样用
+    //   带 /vN 结尾               → 补 /chat/completions
+    //   都不带                    → 补 /v1/chat/completions
+    //
+    // 默认填 DeepSeek：国内可直连、OpenAI 兼容、价格低。
+    // 换别的服务只改这三行（apiKey 下面那行自己填）。
+    baseURL: 'https://api.deepseek.com',
     apiKey: '',
-    model: 'gpt-4o-mini',
+    // deepseek-flash 是当前的主力模型（V4.1-Flash）。
+    // 旧的 deepseek-chat / deepseek-reasoner 已于 2026-07-24 下线，别再用。
+    model: 'deepseek-flash',
     temperature: 0.9,
     topP: 1,
     maxTokens: 300,

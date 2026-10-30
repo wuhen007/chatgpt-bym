@@ -20,7 +20,7 @@
 | 崩溃处理 | `exp_backoff_restart_delay: 1000`，崩溃后指数退避重启 | 同上 |
 | 运行模型 | 单进程单线程，所有插件共用一个事件循环 | Node 运行时 |
 | 宿主自带的库 | `node-schedule`（定时任务）、`chokidar`（文件监听）、`level`、`sequelize`、`redis`、`express` | `package.json` |
-| 我们的依赖 | 只有 `js-yaml` | `chatgpt-bym/package.json` |
+| 我们的依赖 | 只有 `js-yaml` | `package.json` |
 | 我们的代码量 | 3900 行 JS，9 个模块 | — |
 
 `kill_timeout: 10000` 那行在 pm2 配置里有明确注释：

@@ -330,7 +330,7 @@ export function supportGuoba () {
           label: '自曝判定模型',
           bottomHelpMessage: '留空则只用本地规则。填了之后，出现 Claude / GPT 等可疑词时会多调一次廉价模型判定是否真在自曝',
           component: 'Input',
-          componentProps: { placeholder: '留空表示不启用二次判定，例如 gpt-4o-mini' },
+          componentProps: { placeholder: '留空表示不启用二次判定，例如 deepseek-flash' },
         },
         {
           field: 'guard.retry',
@@ -358,7 +358,7 @@ export function supportGuoba () {
           label: '判定模型',
           bottomHelpMessage: '留空复用上面的主模型。建议填个便宜的小模型',
           component: 'Input',
-          componentProps: { placeholder: '留空表示同主模型，例如 gpt-4o-mini' },
+          componentProps: { placeholder: '留空表示同主模型，例如 deepseek-flash' },
         },
         {
           field: 'gate.threshold',
@@ -376,7 +376,7 @@ export function supportGuoba () {
           bottomHelpMessage: 'OpenAI 兼容端点。写 `https://xxx/v1`、`https://xxx` 或完整端点都能识别',
           component: 'Input',
           required: true,
-          componentProps: { placeholder: 'https://api.openai.com/v1' },
+          componentProps: { placeholder: 'https://api.deepseek.com' },
         },
         {
           field: 'llm.apiKey',
@@ -388,10 +388,10 @@ export function supportGuoba () {
         {
           field: 'llm.model',
           label: '模型名称',
-          bottomHelpMessage: '例如 `gpt-4o-mini`、`deepseek-chat`',
+          bottomHelpMessage: '例如 `deepseek-flash`、`deepseek-v4-pro`',
           component: 'Input',
           required: true,
-          componentProps: { placeholder: 'gpt-4o-mini' },
+          componentProps: { placeholder: 'deepseek-flash' },
         },
         {
           field: 'llm.temperature',
@@ -453,7 +453,7 @@ export function supportGuoba () {
           label: '备用渠道',
           bottomHelpMessage: 'JSON 数组，主渠道不可用时依次尝试。格式：[{"baseURL":"...","apiKey":"...","model":"..."}]',
           component: 'InputTextArea',
-          componentProps: { rows: 4, placeholder: '[\n  { "baseURL": "https://backup/v1", "apiKey": "sk-...", "model": "gpt-4o-mini" }\n]' },
+          componentProps: { rows: 4, placeholder: '[\n  { "baseURL": "https://backup/v1", "apiKey": "sk-...", "model": "deepseek-flash" }\n]' },
         },
 
         // ─────────────────────────── 上下文 ───────────────────────────
