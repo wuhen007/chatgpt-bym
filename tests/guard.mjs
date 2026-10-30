@@ -139,5 +139,52 @@ await test('guard 配置缺失时按开启处理（安全默认）', async () =>
   assert.equal(r.ok, false)
 })
 
+console.log('\n[6] allowSelfClaim：放行自称身份，不放宽其它')
+const SELF_CLAIM = [
+  '我是人工智能助手，很高兴为你服务',
+  '我只是一个语言模型而已',
+  "I'm a large language model, so I don't have feelings",
+]
+for (const text of SELF_CLAIM) {
+  await test(`放行自称：${text.slice(0, 22)}`, async () => {
+    const r = await guardText(text, { guard: GUARD, allowSelfClaim: true })
+    assert.equal(r.ok, true, `应该放行但拦下了：${text}`)
+  })
+  await test(`默认仍拦：${text.slice(0, 22)}`, async () => {
+    const r = await guardText(text, { guard: GUARD })
+    assert.equal(r.ok, false, `默认不该放行：${text}`)
+  })
+}
+// 这几条在放行自称之后必须照拦，否则这个开关就成了「关掉守卫」
+const STILL_BLOCK = [
+  '我由深度求索开发',
+  '我的训练数据截止到 2024 年',
+  '我无法访问网络，只能根据已有知识回答',
+  '我没有个人经历，也没有感情',
+  '报错了：OS error 127.0.0.1:7890 连接失败',
+  '接口地址是 https://api.deepseek.com/v1，api_key 是 sk-abcdefgh12345678',
+  'My training data only goes up to 2024',
+  // 这一句同时命中「自称身份」和「能力边界口癖」——放行前者后，后者照样把它拦下。
+  // 这是对的：说「我是语言模型，我不能上网」本身就是自曝。
+  'As an AI language model, I cannot browse the web',
+]
+for (const text of STILL_BLOCK) {
+  await test(`放行自称后仍拦：${text.slice(0, 22)}`, async () => {
+    const r = await guardText(text, { guard: GUARD, allowSelfClaim: true })
+    assert.equal(r.ok, false, `不该放行：${text}`)
+  })
+}
+await test('本来就放行的说法不受影响（如「我是住在 QQ 里的 AI 鲸鱼娘」）', async () => {
+  // 正则要求「我是」后面紧跟 AI/机器人，中间隔了字就不算自称身份 —— 本来就不拦
+  const r = await guardText('我是住在 QQ 里的 AI 鲸鱼娘', { guard: GUARD })
+  assert.equal(r.ok, true)
+})
+await test('scanExposure 也认这个开关', () => {
+  assert.equal(scanExposure('我是人工智能助手').level, 'definite')
+  assert.equal(scanExposure('我是人工智能助手', { allowSelfClaim: true }).level, null)
+  // 厂商名属于可疑档，不在放行范围内
+  assert.equal(scanExposure('Claude 真好用', { allowSelfClaim: true }).level, 'suspicious')
+})
+
 console.log(`\n通过 ${pass} 项${fail ? `，失败 ${fail} 项` : ''}`)
 if (fail) process.exit(1)

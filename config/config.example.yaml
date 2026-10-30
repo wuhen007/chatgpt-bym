@@ -24,7 +24,7 @@ trigger:
 speaking:
   mode: reply
   contextualPrompt: 你现在不是在回复某一条特定消息，而是作为这个群里的一名普通群友自然参与当前聊天。请阅读前面的群聊上下文，选择一个自然的切入点发言，可以接续话题、补充信息、吐槽、提问或表达态度。不要解释任务，不要提及“上下文”“指令”“AI”或“机器人”，不要强行引用、@或逐句回答触发你的那条消息。直接输出一段适合发到群里的自然发言。
-  defaultPresetId: bym_default
+  defaultPresetId: bym_dafeiyu
   presetPrefix: ''
   presetMap: []
   groupPresets: {}
@@ -42,6 +42,7 @@ guard:
   enable: true
   judgeModel: ''
   retry: false
+  allowSelfClaim: false
 dedup:
   enable: true
 gate:

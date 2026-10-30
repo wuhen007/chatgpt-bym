@@ -259,14 +259,21 @@ export async function generateReply (e, trigger) {
 
   // 出站守卫：提示词兜不住的自曝，这里兜。
   // 注意拦掉的是「这一轮不发」，不是「发个错误提示」——伪人不该在群里解释自己为什么不说。
-  let verdict = await guardText(text, { guard: config.guard, chatCompletion, llm })
+  //
+  // allowSelfClaim 来自 guard 配置：有人设（默认的大肥鱼）明确设定「不否认自己是 AI」，
+  // 那句话撞上自称规则会被整轮吞掉，群里表现是「机器人卡住不说话」而不是「它不承认」。
+  const allowSelfClaim = config.guard?.allowSelfClaim === true
+  let verdict = await guardText(text, { guard: config.guard, chatCompletion, llm, allowSelfClaim })
 
   if (!verdict.ok && config.guard?.retry === true) {
     // 重试一次：把命中的原因变成强约束追加到 system 末尾。
     // 只重复调模型，不重跑群上下文和记忆检索（那些没变）。
     const reinforce = `\n\n【本轮必须遵守】上一次的回复里出现了不该说的话（${verdict.why || '暴露身份'}）。`
       + '重新组织一句：绝对不要出现模型名、厂商名、训练/参数/提示词之类的技术细节、本机路径或报错、'
-      + '以及任何「我是 AI / 程序 / 模型 / 助手」的表述。'
+      + (allowSelfClaim
+        // 放行了自称身份，就别再要求「不要出现我是 AI」——那正好和这个人设相反
+        ? '以及任何「我是助手 / 机器人 / 程序」的表述。'
+        : '以及任何「我是 AI / 程序 / 模型 / 助手」的表述。')
     try {
       const retryResult = await chatCompletion({
         messages: [
@@ -277,7 +284,7 @@ export async function generateReply (e, trigger) {
       })
       parsed = parseOnce(retryResult.text)
       text = parsed.text
-      verdict = await guardText(text, { guard: config.guard, chatCompletion, llm })
+      verdict = await guardText(text, { guard: config.guard, chatCompletion, llm, allowSelfClaim })
     } catch (err) {
       globalThis.logger?.warn?.(`[bym][guard] 重试失败，放弃本轮：${err.message}`)
     }

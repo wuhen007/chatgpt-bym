@@ -127,6 +127,12 @@ test('guard.enable 默认 true', () => {
 test('guard.retry 默认 false（不额外多一次请求）', () => {
   assert.equal(config.guard.retry, false)
 })
+test('guard.allowSelfClaim 默认 false（人设不该自称 AI）', () => {
+  assert.equal(config.guard.allowSelfClaim, false)
+})
+test('默认人设是大肥鱼', () => {
+  assert.equal(config.speaking.defaultPresetId, 'bym_dafeiyu')
+})
 test('dedup.enable 默认 true', () => {
   assert.equal(config.dedup.enable, true)
 })

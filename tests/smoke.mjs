@@ -38,12 +38,16 @@ const { loadPresets, resolvePreset } = await import('../models/preset.js')
 const { postProcess, resolveMode } = await import('../models/chatService.js')
 
 let passed = 0
+let failed = 0
 function test (name, fn) {
   try {
     fn()
     passed++
     console.log(`  ok  ${name}`)
   } catch (err) {
+    // 失败也要计数：只报「通过 N 项」的话，失败时数字会变小，
+    // 看着像「测试少了一条」而不是「有一条挂了」
+    failed++
     console.error(`FAIL  ${name}\n      ${err.message}`)
     process.exitCode = 1
   }
@@ -307,11 +311,15 @@ test('读取预设目录', () => {
   assert.ok(presets.size >= 1, '至少一个预设')
   assert.ok(presets.has('bym_default'))
   assert.ok(presets.get('bym_default').system.length > 10)
+  // 默认人设是仓库自带的大肥鱼
+  assert.ok(presets.has('bym_dafeiyu'))
+  assert.ok(presets.get('bym_dafeiyu').system.length > 1000, '大肥鱼人设不该是空壳')
 })
 test('关键词选人设', () => {
   config.data.speaking.presetMap = [{ keywords: ['原神'], presetId: 'bym_tsundere', priority: 10 }]
   assert.equal(resolvePreset('原神启动').id, 'bym_tsundere')
-  assert.equal(resolvePreset('普通聊天').id, 'bym_default')
+  // 没命中关键词时回到全局默认
+  assert.equal(resolvePreset('普通聊天').id, 'bym_dafeiyu')
 })
 
 console.log('\n[8] 输出清洗与模式回退')
@@ -359,4 +367,4 @@ test('临时目录已清理', () => {
   assert.equal(fs.existsSync(sandbox), false)
 })
 
-console.log(`\n通过 ${passed} 项检查${process.exitCode ? '，存在失败项' : ''}\n`)
+console.log(`\n通过 ${passed} 项检查${failed ? `，失败 ${failed} 项` : ''}\n`)

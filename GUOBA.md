@@ -131,7 +131,7 @@ GSelectGroup GSelectFriend
 | 基础设置 | `enable`、`commandPrefix` |
 | 触发控制 | `trigger.groupMode`、`groups`、`hitKeywords`、`probability`、`cooldownSeconds`、`maxPerHour`、`bypassCooldownOnKeyword`、`replyWhenAddressed`、`addressedBypassCooldown`、`ignoreAtOthers`、`ignoreCommandPrefixes`、`minLength`、`maxLength`、`muteKeywords` |
 | 发言风格 | `speaking.mode`、`contextualPrompt`、`defaultPresetId`、`presetPrefix`、`presetMap`、`groupPresets`、`recallSeconds`、`splitReplies`、`maxSegmentLength`、`typingDelay.*`、`gapDelay.*` |
-| 防自曝与去重 | `guard.enable`、`guard.judgeModel`、`guard.retry`、`dedup.enable` |
+| 防自曝与去重 | `guard.enable`、`guard.judgeModel`、`guard.retry`、`guard.allowSelfClaim`、`dedup.enable` |
 | 语义把关（进阶） | `gate.enable`、`gate.model`、`gate.threshold` |
 | 模型接口 | `llm.baseURL`、`apiKey`、`model`、`temperature`、`topP`、`maxTokens`、`timeoutMs`、`stream`、`retries`、`extraHeaders`、`extraBody`、`fallback` |
 | 群聊上下文 | `context.enable`、`length`、`maxChars`、`cacheTTL`、`header`、`message` |

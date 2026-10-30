@@ -235,10 +235,10 @@ export function supportGuoba () {
         {
           field: 'speaking.defaultPresetId',
           label: '默认人设 ID',
-          bottomHelpMessage: '对应插件目录 `presets/<ID>.yaml`，默认 `bym_default`',
+          bottomHelpMessage: '对应插件目录 `presets/<ID>.yaml`，仓库自带 `bym_dafeiyu`（大肥鱼）、`bym_default`（普通群友）、`bym_tsundere`（傲娇）',
           component: 'Input',
           required: true,
-          componentProps: { placeholder: 'bym_default' },
+          componentProps: { placeholder: 'bym_dafeiyu' },
         },
         {
           field: 'speaking.presetPrefix',
@@ -336,6 +336,13 @@ export function supportGuoba () {
           field: 'guard.retry',
           label: '命中后重试一次',
           bottomHelpMessage: '开启则不直接丢弃，而是带着强约束再问一次模型（多一次请求，回复可能变慢）',
+          component: 'Switch',
+        },
+        {
+          field: 'guard.allowSelfClaim',
+          label: '允许自称 AI 身份',
+          bottomHelpMessage: '默认关。有些人设（默认的大肥鱼）明确设定「被问到是不是 AI 时不否认」，'
+            + '这句话会被当成自曝拦掉、整轮不回话。打开后只放行自称身份那几条，厂商名、模型名、本机路径照样拦',
           component: 'Switch',
         },
         {

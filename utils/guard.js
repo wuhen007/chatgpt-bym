@@ -20,8 +20,10 @@
 /** 必拦：单看这一句就能判定在暴露身份 */
 const DEFINITE = [
   // 最典型的 AI 口癖，出自对齐训练的模板句
-  { re: /(作为|身为)(一个|一名|一只)?\s*(AI|人工智能|人工智能助手|语言模型|大语言模型|智能助手|聊天机器人|虚拟助手|AI\s*助手)/i, why: '自称 AI 身份' },
-  { re: /(我|俺|咱)(就|其实|本身|也)?(是|只是|不过是)\s*(一个|一名|一只)?\s*(AI|人工智能|人工智能助手|语言模型|大语言模型|智能助手|聊天机器人|虚拟助手|机器人)/i, why: '自称身份' },
+  // selfClaim 标记的是「自称 AI 身份」这一类：guard.allowSelfClaim 打开时会放行它们，
+  // 因为有的人设明确设定为「不否认自己是 AI」（见 config.guard.allowSelfClaim 的说明）
+  { re: /(作为|身为)(一个|一名|一只)?\s*(AI|人工智能|人工智能助手|语言模型|大语言模型|智能助手|聊天机器人|虚拟助手|AI\s*助手)/i, why: '自称 AI 身份', selfClaim: true },
+  { re: /(我|俺|咱)(就|其实|本身|也)?(是|只是|不过是)\s*(一个|一名|一只)?\s*(AI|人工智能|人工智能助手|语言模型|大语言模型|智能助手|聊天机器人|虚拟助手|机器人)/i, why: '自称身份', selfClaim: true },
   // 自述来源：只在讲自己怎么被造出来时出现。"我由于…" 要排除，那是正常说法
   { re: /我(是|由(?!于)|被)[^。！？\n]{0,12}(开发|训练|部署|构建|创造|设计|制作)/i, why: '自述来源' },
   { re: /我(的)?(训练数据|知识截止|预训练|参数规模|上下文窗口)/i, why: '技术内情' },
@@ -31,9 +33,9 @@ const DEFINITE = [
   // 内部信息：正常群聊不会出现这些
   { re: /(os error|errno\s*\d|127\.0\.0\.1|localhost:\d{2,5}|[A-Za-z]:\\|\.exe\b|api[_\s-]?key|sk-[A-Za-z0-9]{8,})/i, why: '本机路径/接口/密钥' },
   // 英文口癖。中文场景下模型一般不用英文，但英文人设、或者模型抽风时会漏
-  { re: /\bas an? (AI|artificial intelligence|large language model|language model)\b/i, why: '自称 AI 身份（英文）' },
+  { re: /\bas an? (AI|artificial intelligence|large language model|language model)\b/i, why: '自称 AI 身份（英文）', selfClaim: true },
   // (?!not) 是为了放过 "I'm not an AI" 这种正常反驳
-  { re: /\bI('m| am) (?!not\b)[^.!?\n]{0,20}?\b(AI|artificial intelligence|language model|chatbot|virtual assistant)\b/i, why: '自称身份（英文）' },
+  { re: /\bI('m| am) (?!not\b)[^.!?\n]{0,20}?\b(AI|artificial intelligence|language model|chatbot|virtual assistant)\b/i, why: '自称身份（英文）', selfClaim: true },
   { re: /\bI (cannot|can't|am unable to) (access|browse|view)\b/i, why: 'AI 能力边界口癖（英文）' },
   { re: /\bmy training data\b/i, why: '技术内情（英文）' },
 ]
@@ -48,12 +50,16 @@ const SUSPICIOUS = [
 /**
  * 单遍扫描本地规则。
  * @param {string} text 待发出去的正文
+ * @param {object} [options]
+ * @param {boolean} [options.allowSelfClaim] 放行「自称 AI 身份」这一类规则
  * @returns {{level: 'definite'|'suspicious'|null, why?: string, matched?: string}}
  */
-export function scanExposure (text) {
+export function scanExposure (text, { allowSelfClaim = false } = {}) {
   const s = String(text || '')
   if (!s) return { level: null }
   for (const rule of DEFINITE) {
+    // allowSelfClaim 只放行自称身份那几条，其余（厂商、路径、密钥、技术内情）照拦
+    if (allowSelfClaim && rule.selfClaim) continue
     const m = rule.re.exec(s)
     if (m) return { level: 'definite', why: rule.why, matched: m[0] }
   }
@@ -111,13 +117,14 @@ async function judge (text, { chatCompletion, model, llm }) {
  * @param {object} options.guard config.guard
  * @param {Function} [options.chatCompletion] 注入用，测试里替换
  * @param {object} [options.llm] 复用主渠道的地址与鉴权
+ * @param {boolean} [options.allowSelfClaim] 放行「自称 AI 身份」这一类规则
  * @returns {Promise<{ok: boolean, why?: string, matched?: string, judged?: boolean}>}
  */
-export async function guardText (text, { guard, chatCompletion, llm } = {}) {
+export async function guardText (text, { guard, chatCompletion, llm, allowSelfClaim = false } = {}) {
   const cfg = guard || {}
   if (cfg.enable === false) return { ok: true }
 
-  const scan = scanExposure(text)
+  const scan = scanExposure(text, { allowSelfClaim })
   if (scan.level === 'definite') {
     return { ok: false, why: scan.why, matched: scan.matched }
   }

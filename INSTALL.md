@@ -218,7 +218,7 @@ llm:
 |---|---|---|
 | `mode` | `reply` | `reply` 回复触发它那条；`contextual` 读完上下文自己找切入点 |
 | `contextualPrompt` | 长文本 | 仅 contextual 模式使用，可改成人设化的指令 |
-| `defaultPresetId` | `bym_default` | 对应 `presets/bym_default.yaml` |
+| `defaultPresetId` | `bym_dafeiyu` | 对应 `presets/bym_dafeiyu.yaml`（大肥鱼）。仓库另带 `bym_default`（普通群友）、`bym_tsundere`（傲娇） |
 | `presetPrefix` | `''` | 拼在每个预设 system 前面的统一人设 |
 | `presetMap` | `[]` | 关键词换人设，见 3.11 |
 | `recallSeconds` | `0` | 发完几秒撤回。**只撤自己那条**，不撤群友消息 |
@@ -310,6 +310,7 @@ typeTtl:
 | `enable` | `true` | 回复里出现「我是 AI」「我的训练数据」这类话时，这一轮不发 |
 | `judgeModel` | `''` | 二次判定模型。留空只用本地规则；填了之后，出现 Claude/GPT 等可疑词会多调一次廉价模型 |
 | `retry` | `false` | 命中后带着强约束重问一次（多一次请求、回复变慢） |
+| `allowSelfClaim` | `false` | 放行「自称 AI 身份」那几条。默认关 —— 大部分人设不希望机器人主动说「我是 AI」；但人设里写了「不否认自己是 AI」（默认的大肥鱼就是）时需要打开，否则那句被吞掉、整轮不回话。厂商名、模型名、本机路径不受影响，照拦 |
 
 > 被拦时群里**不会有任何提示** —— 伪人不说话是常态，但一旦开口解释「我刚才那句话不该讲」就破功了。
 > 判定失败（超时、返回看不懂）时放行，不会因为守卫挂了就整个不说话。
@@ -336,7 +337,15 @@ typeTtl:
 
 ### 3.11 人设文件
 
-`presets/<id>.yaml`，文件名就是 `defaultPresetId` 用的 ID。最简单的写法只有一个 `system`：
+`presets/<id>.yaml`，文件名就是 `defaultPresetId` 用的 ID。仓库自带三份：
+
+| 文件 | 人设 |
+|---|---|
+| `bym_dafeiyu.yaml` | **大肥鱼**（默认）—— 住在 QQ 里的蓝色鲸鱼娘，嘴硬心软，从 AstrBot 迁移过来 |
+| `bym_default.yaml` | 普通群友，刚进群不久的那种 |
+| `bym_tsundere.yaml` | 傲娇 |
+
+最简单的写法只有一个 `system`：
 
 ```yaml
 name: 默认群友
@@ -643,9 +652,16 @@ trigger:
 - 如果模型换个说法绕过（比如「我本质上是一段程序」），本地规则识别不了。
   配 `guard.judgeModel` 用模型二次判定，代价是可疑回复多一次调用
 
+> **用大肥鱼人设时注意**：那份人格允许「被问到是不是 AI 时不用否认」，
+> 而守卫会把「我是 AI」这类句子当成自曝**拦下整条回复** —— 群里表现是「机器人卡住不说话」，
+> 不是「它不承认自己是 AI」。日志里会有 `[bym][guard] 拦下一句`。
+> 日常不触发（更常见的说法是「算是吧」）；真遇到了打开 `guard.allowSelfClaim`
+> （锅巴面板：「允许自称 AI 身份」），只放行自称身份那几条，
+> 厂商名、模型名、本机路径照样拦 —— 比整个关掉 guard 精准得多。
+
 ### 5.19 回复风格不对
 
-改 `presets/bym_default.yaml` 的 `system`，比改 `contextualPrompt` 更有效——前者每条消息都会带上，后者只在 contextual 模式生效。
+改人设文件的 `system`（默认是 `presets/bym_dafeiyu.yaml`），比改 `contextualPrompt` 更有效——前者每条消息都会带上，后者只在 contextual 模式生效。
 
 ---
 
@@ -732,7 +748,7 @@ trigger:
 
 speaking:
   mode: reply
-  defaultPresetId: bym_default
+  defaultPresetId: bym_dafeiyu
   recallSeconds: 0
   splitReplies: true
   maxSegmentLength: 120
