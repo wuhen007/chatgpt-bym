@@ -18,20 +18,76 @@ import { parseReply, MEMORY_CONTRACT } from './replyParser.js'
  */
 
 /**
- * 人设 system。前缀 + 预设正文，末尾补一条运行时铁律：
- * 模型很容易在长上下文里“变回助手”，这句兜底比在预设里反复强调有效。
+ * 人设 system。结构化的部分在前，`system` 自由文本作为补充跟在后面。
+ *
+ * 为什么结构化放前面：模型对 system 开头的内容权重大，把「你是谁/你怎么说话」
+ * 放在最前面比塞在自由文本中间有效。而自由文本在最后，正好用来表达
+ * 那些没法程序化描述的细节（态度、立场、和群友的关系）。
+ *
+ * 末尾补一条运行时铁律：模型很容易在长上下文里「变回助手」，
+ * 这句兜底比在预设里反复强调有效。
+ *
+ * 导出供测试（运行时只有本文件的 generateReply 调它）。
  */
-function buildSystemPrompt (preset) {
+export function buildSystemPrompt (preset, groupName) {
   const prefix = String(config.speaking.presetPrefix || '').trim()
+  const sections = []
+
+  if (preset?.identity) {
+    const parts = []
+    const who = preset.name ? `你是${preset.name}` : '你'
+    const age = preset.identity.age ? `${preset.identity.age} 岁` : ''
+    const { city, job } = preset.identity
+    const place = city && job ? `在${city}做${job}` : (city ? `在${city}` : (job ? `做${job}` : ''))
+    const head = [who, age, place].filter(Boolean).join('，')
+    parts.push(head ? `${head}。` : '')
+    if (preset.identity.signature) parts.push(preset.identity.signature)
+    sections.push(`# 你是谁\n${parts.filter(Boolean).join('')}`)
+  }
+
+  if (preset?.speech) {
+    const lines = []
+    // 两个短句各带句号拼在一行：「口语、随意。每次只说一到两句。」
+    // 用逗号连成一句会读不断（「口语、随意，偶尔带点语气词，每次只说一到两句」）。
+    const head = [preset.speech.style, preset.speech.length ? `每次只说${preset.speech.length}` : '']
+      .filter(Boolean)
+      .map(text => (/[。.！!？?]$/.test(text) ? text : `${text}。`))
+    if (head.length) lines.push(head.join(''))
+    if (preset.speech.catchphrases?.length) {
+      lines.push(`偶尔用这些口头禅：${preset.speech.catchphrases.join('、')}`)
+    }
+    if (preset.speech.never?.length) {
+      lines.push(`绝对不要：${preset.speech.never.join('、')}`)
+    }
+    if (lines.length) sections.push(`# 你怎么说话\n${lines.join('\n')}`)
+  }
+
+  // 群名。'unknown' 是拉不到群信息时的占位，别把它写进 prompt。
+  const name = String(groupName || '').trim()
+  if (preset?.groupAware !== false && name && name !== 'unknown') {
+    sections.push(`# 你在哪\n这里是 QQ 群「${name}」。你是群里的普通成员，不是助手。`)
+  }
+
   const body = String(preset?.system || '').trim()
-  const parts = [prefix, body].filter(Boolean)
-  parts.push('记住：你是这个群里的普通成员。不要自称 AI、助手或机器人，不要输出 Markdown 列表和标题，不要解释你正在做什么。')
-  return parts.join('\n\n')
+  sections.push(body)
+
+  // 最后兜底的必要说明：结构化字段只描述了「怎么说话」，没说「不要自称 AI」。
+  // 这句和结构化无关，任何预设都要带上。
+  sections.push('记住：你是这个群里的普通成员。不要自称 AI、助手或机器人，不要输出 Markdown 列表和标题，不要解释你正在做什么。')
+
+  return [prefix, ...sections].filter(Boolean).join('\n\n')
+}
+
+/** 群名，拿不到时返回空串（让调用方决定用不用） */
+function groupNameOf (e) {
+  const name = e?.group?.name || e?.group_name || ''
+  return String(name || '').trim()
 }
 
 /**
  * 判定本次用哪种发言方式。
  * contextual 依赖群上下文，拿不到上下文时自动退回 reply，否则模型会“凭空发言”。
+ * 导出供测试。
  */
 export function resolveMode (hasContext, addressed = false) {
   // 被点名时必须正面回答。contextual 是「自己找切入点插话」，
@@ -49,7 +105,8 @@ export function resolveMode (hasContext, addressed = false) {
  */
 export async function generateReply (e, trigger) {
   const triggerText = String(trigger?.text || '')
-  const preset = resolvePreset(triggerText)
+  // 群级人设绑定优先于关键词规则，见 preset.js 的 resolvePreset
+  const preset = resolvePreset(triggerText, e?.group_id)
 
   // 群上下文与图片互不依赖，并发取
   const [groupContext, currentImages, quotedImages] = await Promise.all([
@@ -88,13 +145,21 @@ export async function generateReply (e, trigger) {
     }
   }
 
-  // 记忆检索用“最近在聊什么”当查询词，比用触发词更贴合群聊语境
   const memoryQuery = hasContext
     ? groupContext.items.slice(-6).map(item => item.text).join(' ')
     : triggerText
-  const memoryPrompt = buildMemoryPrompt(e.group_id, memoryQuery)
 
-  const systemPrompt = buildSystemPrompt(preset)
+  // dryRun（`#bym 测试`）不累加访问计数：那只是管理员想看效果，
+  // 不该改变「哪些记忆更常被想起」的排序。
+  const memoryPrompt = buildMemoryPrompt(
+    e.group_id,
+    memoryQuery,
+    undefined,
+    undefined,
+    { countAccess: trigger?.dryRun !== true }
+  )
+
+  const systemPrompt = buildSystemPrompt(preset, groupNameOf(e))
   const contextualPrompt = String(config.speaking.contextualPrompt || '').trim() || '请结合上面的群聊内容，自然地接一句话。'
   // 被点名叫到的人应该正面接话，而不是像平时那样「顺口插一句」。
   // 同一条 user 消息里的措辞差别，比在 system 里加一句约束更有效。
@@ -104,7 +169,14 @@ export async function generateReply (e, trigger) {
 
   // 记忆开启时改成 JSON 契约：回话的同时顺带产出「值得记住的事」，
   // 省掉原来那次独立的抽取调用（那一轮本来就已经在调模型了）。
-  const wantMemory = config.memory.enable === true && config.memory.extract !== false
+  //
+  // 三个条件都要满足才加契约：
+  // - enable：总开关
+  // - write：这一侧是「要不要写」，只读模式下不该要求模型输出 memory（白占字数还增加解析风险）
+  // - extract：老配置的兼容项，extract:false 的升级用户不该突然开始写
+  const wantMemory = config.memory.enable === true &&
+    config.memory.write !== false &&
+    config.memory.extract !== false
 
   // 预算裁剪。固定的部分（人设 + 指令 + 契约）算进 system，只有正文参与截断，
   // 这样截出来的永远是消息本身，不会把指令切成半句。
@@ -268,5 +340,6 @@ export function postProcess (raw) {
 
 /** 供「测试」指令使用：不落库、不发群，直接返回文本 */
 export async function dryRun (e, text) {
-  return await generateReply(e, { text, forced: true })
+  // dryRun 标记会一路传到记忆检索，跳过访问计数的累加
+  return await generateReply(e, { text, forced: true, dryRun: true })
 }

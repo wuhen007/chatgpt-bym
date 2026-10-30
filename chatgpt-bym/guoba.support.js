@@ -29,6 +29,7 @@ const LIST_FIELDS = new Set([
 /** 结构化字段：填 JSON。value 是期望的顶层类型，用于校验。 */
 const JSON_FIELDS = new Map([
   ['speaking.presetMap', 'array'],
+  ['speaking.groupPresets', 'object'],
   ['llm.fallback', 'array'],
   ['llm.extraHeaders', 'object'],
   ['llm.extraBody', 'object'],
@@ -37,6 +38,7 @@ const JSON_FIELDS = new Map([
 /** 字段中文名，报错时指得清是哪个填错了 */
 const FIELD_LABELS = {
   'speaking.presetMap': '关键词换人设',
+  'speaking.groupPresets': '按群指定人设',
   'llm.fallback': '备用渠道',
   'llm.extraHeaders': '附加请求头',
   'llm.extraBody': '附加请求体',
@@ -251,6 +253,13 @@ export function supportGuoba () {
           bottomHelpMessage: 'JSON 数组，留空表示不使用。格式：[{"keywords":["原神"],"presetId":"bym_tsundere","priority":10}]',
           component: 'InputTextArea',
           componentProps: { rows: 4, placeholder: '[\n  { "keywords": ["原神"], "presetId": "bym_tsundere", "priority": 10 }\n]' },
+        },
+        {
+          field: 'speaking.groupPresets',
+          label: '按群指定人设',
+          bottomHelpMessage: 'JSON 对象，群号 -> 人设 ID。优先级高于上面的关键词规则：关键词是「聊到这个话题就换」，这里是「这个群就是这个人」。也可以在群里用 #bym 人设 <id> 设置',
+          component: 'InputTextArea',
+          componentProps: { rows: 3, placeholder: '{\n  "123456789": "bym_tsundere"\n}' },
         },
         {
           field: 'speaking.recallSeconds',
@@ -533,8 +542,19 @@ export function supportGuoba () {
         {
           field: 'memory.enable',
           label: '启用群记忆',
-          helpMessage: '依赖「注入群聊记录」开启，否则抽取不到语料',
           bottomHelpMessage: '开启后会把群里的长期事实记下来，聊天时按相关度带进去',
+          component: 'Switch',
+        },
+        {
+          field: 'memory.write',
+          label: '记录新记忆',
+          bottomHelpMessage: '关掉后只读不写：仍会参考已有记忆，但不再记新的（记忆满了或在观察期时用）',
+          component: 'Switch',
+        },
+        {
+          field: 'memory.inject',
+          label: '回复时参考记忆',
+          bottomHelpMessage: '关掉后只写不读：会继续记录，但回复时不带入（想先观察它在记什么时用）',
           component: 'Switch',
         },
         {
@@ -543,6 +563,13 @@ export function supportGuoba () {
           bottomHelpMessage: '带进提示词的历史事实条数，太多会挤占上下文',
           component: 'InputNumber',
           componentProps: { min: 0, max: 20 },
+        },
+        {
+          field: 'memory.injectMaxChars',
+          label: '记忆字数上限',
+          bottomHelpMessage: '单次注入的总字数。5 条各 500 字会吃掉 2500 字，把群记录挤掉。默认 1200，填 0 表示只按条数限制',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 8000, step: 100 },
         },
         {
           field: 'memory.extract',
@@ -560,9 +587,64 @@ export function supportGuoba () {
         {
           field: 'memory.maxFactsPerGroup',
           label: '每群记忆上限',
-          bottomHelpMessage: '超出后淘汰「不重要且较旧」的条目',
+          bottomHelpMessage: '超出后先清掉已过期和已被取代的，仍超才淘汰「不重要且较旧」的',
           component: 'InputNumber',
           componentProps: { min: 10, max: 2000, step: 10 },
+        },
+        {
+          field: 'memory.conflictResolve',
+          label: '冲突消解',
+          bottomHelpMessage: '同一个人同一方面说了新的（比如张三换公司了），旧的不再被提起，但记录仍保留可查',
+          component: 'Switch',
+        },
+        {
+          field: 'memory.profileEnabled',
+          label: '注入群画像',
+          bottomHelpMessage: '每轮都告诉模型「这个群是个什么群」。用 #bym 画像 设置，不参与相关度筛选',
+          component: 'Switch',
+        },
+        { label: '记忆保留天数', component: 'SOFT_GROUP_BEGIN' },
+        {
+          field: 'memory.typeTtl.plan',
+          label: '计划',
+          bottomHelpMessage: '「明天三点开会」这类。填 0 表示永不过期',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 3650 },
+        },
+        {
+          field: 'memory.typeTtl.event',
+          label: '已发生的事',
+          bottomHelpMessage: '「上周六去爬山了」这类，过了时效就不该再提',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 3650 },
+        },
+        {
+          field: 'memory.typeTtl.preference',
+          label: '偏好与忌讳',
+          bottomHelpMessage: '「群主不喜欢有人发语音」这类',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 3650 },
+        },
+        {
+          field: 'memory.typeTtl.relation',
+          label: '人物关系',
+          bottomHelpMessage: '「老王是老李的同事」这类',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 3650 },
+        },
+        {
+          field: 'memory.typeTtl.fact',
+          label: '长期事实',
+          bottomHelpMessage: '「张三在字节做后端」这类，默认半年',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 3650 },
+        },
+        {
+          field: 'memory.typeTtl.unknown',
+          label: '未分类',
+          bottomHelpMessage: '模型没给出类型时的兜底天数',
+          component: 'InputNumber',
+          componentProps: { min: 0, max: 3650 },
         },
       ],
 
@@ -581,6 +663,15 @@ export function supportGuoba () {
 
       /** 前端点确定后调用。data 是扁平 map，键为 schema.field */
       setConfigData (data, { Result }) {
+        // 只读保护期间写不了盘，必须明确报错。
+        // 否则用户看到「保存成功」但重启后全丢，比直接报错难受得多。
+        if (config._readonly) {
+          return Result.error(
+            '配置文件上次解析失败，当前处于只读保护模式，修改不会保存。' +
+            '请先修好 config/config.yaml（原始内容已备份为 config.yaml.broken），或删掉它让插件重建'
+          )
+        }
+
         const patch = {}
 
         for (const [keyPath, rawValue] of Object.entries(data || {})) {
@@ -615,6 +706,14 @@ export function supportGuoba () {
             }
             patch[keyPath] = parsed
             continue
+          }
+
+          // 密码框特殊处理：锅巴回显 InputPassword 时可能给空串或一串 *，
+          // 用户只是打开面板点了个保存，不该把已经填好的 apiKey 清掉。
+          // 真要在面板里清空，填一个空格以外的东西再删；或者直接改配置文件。
+          if (keyPath.endsWith('apiKey') && !String(rawValue ?? '').trim().replace(/\*/g, '')) {
+            const current = String(getPath(config.data, keyPath) || '')
+            if (current) continue
           }
 
           patch[keyPath] = rawValue

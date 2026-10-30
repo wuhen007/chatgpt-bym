@@ -22,7 +22,8 @@ fs.mkdirSync(process.env.BYM_CONFIG_DIR, { recursive: true })
 fs.mkdirSync(process.env.BYM_DATA_DIR, { recursive: true })
 fs.cpSync(path.resolve(import.meta.dirname, '..', 'presets'), path.join(process.env.BYM_DATA_DIR, 'presets'), { recursive: true })
 
-const { config } = await import('../config/config.js')
+const configMod = await import('../config/config.js')
+const { config } = configMod
 config.load()
 const triggerMod = await import('../utils/trigger.js')
 
@@ -41,7 +42,7 @@ function test (name, fn) {
 
 /** BymConfig 类自己的成员，不是配置段 */
 const CLASS_MEMBERS = new Set([
-  'data', 'file', 'mtimeMs', 'load', 'save', 'set', 'get', 'watch', 'apply', 'enabled',
+  'data', 'file', 'mtimeMs', 'load', 'save', 'set', 'get', 'watch', 'unwatch', 'apply', 'enabled',
   '_timer', '_watcher',
 ])
 
@@ -162,6 +163,274 @@ test('修正后 trigger.js 不再抛错（这条是真正的回归点）', () =>
   const r = evaluate({ isGroup: true, group_id: '123456', self_id: '9', user_id: '8', message: [], raw_message: 'x' }, 'bym 你好')
   assert.equal(r.forced, true)
 })
+
+console.log('\n[5] 配置损坏保护（解析失败时绝不覆盖用户文件）')
+
+const CONFIG_FILE = path.join(process.env.BYM_CONFIG_DIR, 'config.yaml')
+const BROKEN_BACKUP = `${CONFIG_FILE}.broken`
+const GOOD = 'enable: true\nllm:\n  apiKey: sk-real-key-123\n  model: my-model\n'
+
+function writeRaw (text) {
+  fs.writeFileSync(CONFIG_FILE, text)
+  // 让 watch 的 mtime 比较不会误判
+  config.mtimeMs = 0
+}
+function clearBroken () {
+  config._readonly = false
+  if (fs.existsSync(BROKEN_BACKUP)) fs.unlinkSync(BROKEN_BACKUP)
+}
+
+test('Tab 缩进 → 进入只读保护，不抛异常', () => {
+  clearBroken()
+  writeRaw('llm:\n\tapiKey: sk-real-key-123\n')
+  config.load()
+  assert.equal(config._readonly, true, '应该进入只读模式')
+  assert.equal(config.data.llm.apiKey, '', '内存里是默认值（apiKey 空）')
+})
+
+test('坏文件被备份，且备份里 key 还在', () => {
+  assert.ok(fs.existsSync(BROKEN_BACKUP), '应生成 .broken 备份')
+  assert.match(fs.readFileSync(BROKEN_BACKUP, 'utf8'), /sk-real-key-123/)
+})
+
+test('只读期间 set 既不写盘也不改内存（避免状态漂移）', () => {
+  const before = fs.readFileSync(CONFIG_FILE, 'utf8')
+  const ok = config.set('speaking.recallSeconds', 12)
+  assert.equal(ok, false, 'set 应返回 false 表示没写盘')
+  // 关键：内存也不该变。只改内存不改磁盘的话，用户看到「已生效」，
+  // 等配置文件修好触发重载，这个修改又会静默消失。
+  assert.notEqual(config.data.speaking.recallSeconds, 12, '内存里也不该生效')
+  assert.equal(fs.readFileSync(CONFIG_FILE, 'utf8'), before, '文件必须一字不改')
+})
+
+test('修好配置后自动解除只读并读回真实值', () => {
+  writeRaw(GOOD)
+  config.load()
+  assert.equal(config._readonly, false)
+  assert.equal(config.data.llm.apiKey, 'sk-real-key-123')
+  assert.equal(config.data.llm.model, 'my-model')
+})
+
+test('全角冒号也能拦住（这条最阴：YAML 不报错，整份文件解析成一个字符串）', () => {
+  clearBroken()
+  writeRaw('llm：\n  apiKey：sk-real-key-123\n')
+  config.load()
+  assert.equal(config._readonly, true, '顶层不是映射时必须当成坏配置')
+  assert.match(fs.readFileSync(BROKEN_BACKUP, 'utf8'), /sk-real-key-123/, '原文必须被备份下来')
+})
+
+test('顶层是数组也拦住', () => {
+  clearBroken()
+  writeRaw('- a\n- b\n')
+  config.load()
+  assert.equal(config._readonly, true)
+})
+
+test('引号不配对拦住', () => {
+  clearBroken()
+  writeRaw('llm:\n  apiKey: "sk-real-key-123\n')
+  config.load()
+  assert.equal(config._readonly, true)
+})
+
+test('空文件不算坏，用默认值且可以写盘', () => {
+  clearBroken()
+  writeRaw('')
+  config.load()
+  assert.equal(config._readonly, false, '空文件应视为新配置')
+  assert.equal(config.data.enable, false, '默认 enable 是 false')
+})
+
+test('多次损坏时保留最早那份备份，不被新的坏文件覆盖', () => {
+  clearBroken()
+  writeRaw('bad1:\n\tx: 1\n')
+  config.load()
+  const first = fs.readFileSync(BROKEN_BACKUP, 'utf8')
+  writeRaw('bad2:\n\ty: 2\n')
+  config.load()
+  assert.equal(fs.readFileSync(BROKEN_BACKUP, 'utf8'), first, '第一次的备份才最可能是有用的那份')
+})
+
+test('恢复后能正常写盘，且不留临时文件', () => {
+  clearBroken()
+  writeRaw(GOOD)
+  config.load()
+  config.set('speaking.recallSeconds', 7)
+  assert.match(fs.readFileSync(CONFIG_FILE, 'utf8'), /recallSeconds: 7/)
+  assert.equal(fs.existsSync(`${CONFIG_FILE}.tmp`), false, '原子写不该留下 .tmp')
+})
+
+test('缺新增项时只补内存，不改写文件（否则注释会被清空）', () => {
+  clearBroken()
+  // 只给一个键，其余全靠默认值补
+  writeRaw('# 我手写的注释，升级后应该还在\nenable: true\n')
+  config.load()
+  const text = fs.readFileSync(CONFIG_FILE, 'utf8')
+  assert.match(text, /我手写的注释/, '注释必须保留')
+  assert.equal(text.trim(), '# 我手写的注释，升级后应该还在\nenable: true'.trim(), '文件不该被改写')
+  assert.equal(config.data.trigger.probability, 0.02, '但内存里应该补上了默认值')
+})
+
+console.log('\n[6] 配置与数据的存放位置')
+
+const { detectYunzaiRoot, migrateFromPluginDir } = configMod
+
+/** 在临时目录搭一个假的云崽：<root>/package.json + plugins/chatgpt-bym/ */
+function fakeYunzai (pkg) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-yz-'))
+  if (pkg !== null) fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(pkg))
+  const plugin = path.join(root, 'plugins', 'chatgpt-bym')
+  fs.mkdirSync(plugin, { recursive: true })
+  return { root, plugin }
+}
+
+test('标准布局 + 包名含 yunzai → 认出根目录', () => {
+  const { root, plugin } = fakeYunzai({ name: 'trss-yunzai' })
+  assert.equal(detectYunzaiRoot(plugin), root)
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('包名不含 yunzai（自定义 fork）→ 认不出，退回原路径', () => {
+  const { root, plugin } = fakeYunzai({ name: 'my-bot' })
+  assert.equal(detectYunzaiRoot(plugin), null)
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('不在 plugins/ 下一层 → 认不出', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-yz-'))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'trss-yunzai' }))
+  const plugin = path.join(root, 'somewhere', 'chatgpt-bym')
+  fs.mkdirSync(plugin, { recursive: true })
+  assert.equal(detectYunzaiRoot(plugin), null)
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('没有 package.json → 认不出，不报错', () => {
+  const { root, plugin } = fakeYunzai(null)
+  assert.equal(detectYunzaiRoot(plugin), null)
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('迁移：旧位置有、新位置没有 → 复制过去', () => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  const dst = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  fs.writeFileSync(path.join(src, 'config.yaml'), 'llm:\n  apiKey: sk-abc\n')
+  fs.mkdirSync(path.join(src, 'data'))
+  fs.writeFileSync(path.join(src, 'data', 'memory.json'), '{"version":2,"groups":{}}')
+
+  const moved = migrateFromPluginDir({
+    dataHome: dst,
+    legacyConfigDir: src,
+    legacyDataDir: path.join(src, 'data'),
+    configDir: dst,
+    dataDir: dst,
+  })
+  assert.deepEqual(moved.sort(), ['config.yaml', 'memory.json'])
+  assert.match(fs.readFileSync(path.join(dst, 'config.yaml'), 'utf8'), /sk-abc/)
+  assert.ok(fs.existsSync(path.join(dst, 'memory.json')))
+  // 原件必须保留
+  assert.ok(fs.existsSync(path.join(src, 'config.yaml')), '旧文件不能被删')
+  fs.rmSync(src, { recursive: true, force: true })
+  fs.rmSync(dst, { recursive: true, force: true })
+})
+
+test('迁移：新位置已有配置 → 不覆盖', () => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  const dst = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  fs.writeFileSync(path.join(src, 'config.yaml'), 'enable: false\n')
+  fs.writeFileSync(path.join(dst, 'config.yaml'), 'enable: true\n')
+
+  const moved = migrateFromPluginDir({
+    dataHome: dst,
+    legacyConfigDir: src,
+    legacyDataDir: path.join(src, 'data'),
+    configDir: dst,
+    dataDir: dst,
+  })
+  assert.deepEqual(moved, [])
+  assert.match(fs.readFileSync(path.join(dst, 'config.yaml'), 'utf8'), /enable: true/, '新位置优先')
+  fs.rmSync(src, { recursive: true, force: true })
+  fs.rmSync(dst, { recursive: true, force: true })
+})
+
+test('没检测到云崽（dataHome 为 null）时完全不迁移', () => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  fs.writeFileSync(path.join(src, 'config.yaml'), 'enable: true\n')
+  const moved = migrateFromPluginDir({
+    dataHome: null,
+    legacyConfigDir: src,
+    legacyDataDir: src,
+    configDir: src,
+    dataDir: src,
+  })
+  assert.deepEqual(moved, [])
+  fs.rmSync(src, { recursive: true, force: true })
+})
+
+test('旧位置什么都没有 → 返回空，不报错', () => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  const dst = fs.mkdtempSync(path.join(os.tmpdir(), 'bym-mig-'))
+  const moved = migrateFromPluginDir({
+    dataHome: dst,
+    legacyConfigDir: src,
+    legacyDataDir: path.join(src, 'data'),
+    configDir: dst,
+    dataDir: dst,
+  })
+  assert.deepEqual(moved, [])
+  fs.rmSync(src, { recursive: true, force: true })
+  fs.rmSync(dst, { recursive: true, force: true })
+})
+
+console.log('\n[7] 危险输入')
+
+test('__proto__ 路径被拒绝，且不污染原型', () => {
+  config._readonly = false
+  const before = {}.polluted
+  const ok = config.set('__proto__.polluted', 'yes')
+  assert.equal(ok, false, '应拒绝')
+  assert.equal({}.polluted, before, 'Object.prototype 不该被改')
+  delete Object.prototype.polluted
+})
+
+test('apply 里混入 __proto__ 只跳过那一条，其余照常写入', () => {
+  const ok = config.apply({ '__proto__.polluted': 'yes', 'speaking.recallSeconds': 33 })
+  assert.equal(ok, true, '合法项仍应写入')
+  assert.equal(config.data.speaking.recallSeconds, 33)
+  assert.equal({}.polluted, undefined, 'Object.prototype 不该被改')
+  delete Object.prototype.polluted
+})
+
+test('constructor / prototype 段也拒绝', () => {
+  config.set('constructor.x', 1)
+  config.set('a.prototype.b', 1)
+  assert.equal({}.x, undefined)
+  assert.equal(typeof Object.prototype.b, 'undefined')
+})
+
+// ── 剩下这条要起新模块实例（configDir 是 import 时求值的常量），用 top-level await ──
+console.log('\n[8] 目录建不出来时不能把插件带崩')
+{
+  const blocker = path.join(sandbox, 'blocker-file')
+  fs.writeFileSync(blocker, 'x')
+  const saved = process.env.BYM_CONFIG_DIR
+  process.env.BYM_CONFIG_DIR = blocker
+  const mod = await import(`../config/config.js?blocker=${Date.now()}`)
+  let threw = null
+  try { mod.config.load() } catch (e) { threw = e }
+  process.env.BYM_CONFIG_DIR = saved
+
+  if (threw) {
+    fail++
+    console.log('  FAIL load 不该把异常抛给 index.js\n       ' + threw.message)
+  } else if (mod.config._readonly !== true) {
+    fail++
+    console.log('  FAIL 应该退到只读保护模式')
+  } else {
+    pass++
+    console.log('  ok  load 不抛错，退到只读模式（插件能起来）')
+  }
+}
 
 fs.rmSync(sandbox, { recursive: true, force: true })
 console.log(`\n通过 ${pass} 项${fail ? `，失败 ${fail} 项` : ''}`)

@@ -27,6 +27,7 @@ speaking:
   defaultPresetId: bym_default
   presetPrefix: ''
   presetMap: []
+  groupPresets: {}
   recallSeconds: 0
   splitReplies: true
   maxSegmentLength: 120
@@ -80,10 +81,22 @@ vision:
   includeContextImages: false
 memory:
   enable: false
+  inject: true
+  write: true
   injectLimit: 5
+  injectMaxChars: 1200
   extract: true
   extractModel: ''
   maxFactsPerGroup: 200
+  typeTtl:
+    plan: 2
+    event: 7
+    preference: 60
+    relation: 90
+    fact: 180
+    unknown: 30
+  conflictResolve: true
+  profileEnabled: true
   extractPrompt: >-
-    你是一个群聊记忆抽取助手。阅读给出的群聊记录，抽出值得长期记住的事实（成员身份/职业/所在地、群内的约定与梗、发生过的事件与决定、成员明确的偏好）。不要抽取寒暄、日常闲聊、与机器人互动的指令。返回 JSON 数组，每个元素形如 {"fact":"用一句话完整描述","topic":"主题词","importance":0.5}，importance 取 0~1。没有值得记的就返回
-    []。不要输出任何解释或代码块标记。
+    你是一个群聊记忆抽取助手。阅读给出的群聊记录，抽出值得长期记住的事实（成员身份/职业/所在地、群内的约定与梗、发生过的事件与决定、成员明确的偏好）。不要抽取寒暄、日常闲聊、与机器人互动的指令。返回 JSON 数组，每个元素形如
+    {"fact":"用一句话完整描述","topic":"主题词","type":"fact","subject":"这条讲的是谁","importance":0.5}，importance 取 0~1，type 取 plan/event/preference/relation/fact 之一。没有值得记的就返回 []。不要输出任何解释或代码块标记。

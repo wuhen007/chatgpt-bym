@@ -263,6 +263,50 @@ test('保存后记录了 mtime（供热加载跳过自身写入）', () => {
   assert.ok(config.mtimeMs > 0)
 })
 
+console.log('\n[5] 密码框不会误清空 apiKey')
+
+test('面板回显空串时保存，保留已有的 apiKey', () => {
+  support.configInfo.setConfigData({ 'llm.apiKey': 'sk-existing-key' }, { Result })
+  assert.equal(config.data.llm.apiKey, 'sk-existing-key', '前置：先存一个 key')
+
+  // 锅巴的 InputPassword 回显时可能给空串 —— 用户只是点了保存，不该清空
+  support.configInfo.setConfigData({ 'llm.apiKey': '' }, { Result })
+  assert.equal(config.data.llm.apiKey, 'sk-existing-key', '空串不该覆盖已有 key')
+})
+
+test('回显成一串 * 时也不覆盖', () => {
+  support.configInfo.setConfigData({ 'llm.apiKey': '********' }, { Result })
+  assert.equal(config.data.llm.apiKey, 'sk-existing-key')
+})
+
+test('真的填了新 key 时正常覆盖', () => {
+  support.configInfo.setConfigData({ 'llm.apiKey': 'sk-new-key' }, { Result })
+  assert.equal(config.data.llm.apiKey, 'sk-new-key')
+})
+
+test('原本没有 key 时，空串不会写出脏值', () => {
+  support.configInfo.setConfigData({ 'llm.apiKey': '' }, { Result })
+  assert.equal(config.data.llm.apiKey, 'sk-new-key', '已有值时保留')
+})
+
+console.log('\n[6] 只读保护期间不许假装保存成功')
+
+test('只读时 setConfigData 直接报错，不是「保存成功」', () => {
+  config._readonly = true
+  const before = config.data.speaking.mode
+  const res = support.configInfo.setConfigData({ 'speaking.mode': 'reply' }, { Result })
+  assert.equal(res.type, 'error', '应该返回错误而不是 ok')
+  assert.match(JSON.stringify(res), /只读保护/)
+  assert.equal(config.data.speaking.mode, before, '也不该改内存')
+})
+
+test('解除只读后恢复正常', () => {
+  config._readonly = false
+  const res = support.configInfo.setConfigData({ 'speaking.mode': 'reply' }, { Result })
+  assert.equal(res.type, 'ok')
+  assert.equal(config.data.speaking.mode, 'reply')
+})
+
 fs.rmSync(sandbox, { recursive: true, force: true })
 console.log(`\n通过 ${passed} 项检查${process.exitCode ? '，存在失败项' : ''}\n`)
 process.exit(process.exitCode || 0)

@@ -9,6 +9,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config } from './config/config.js'
+import { disposeMemory } from './models/memory.js'
+import { createShutdown, installShutdownHooks } from './utils/lifecycle.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const pluginRoot = path.resolve(__dirname)
@@ -55,4 +57,33 @@ globalThis.logger?.info?.('[bym] 伪人模式插件加载完成')
 globalThis.logger?.info?.(`[bym] 当前状态：${config.enabled ? '已开启' : '已关闭'}，触发概率 ${config.trigger.probability}`)
 globalThis.logger?.info?.('**************************************')
 
-export { apps }
+/**
+ * 进程退出收尾。
+ *
+ * pm2 的 `kill_timeout: 10000` 给了 10 秒做清理再 SIGKILL —— 不注册信号处理的话，
+ * 这 10 秒是白扔的，最后几条记忆会跟着进程一起没。
+ *
+ * 只做两件事：把记忆刷盘、停掉配置文件监听。**不调 `process.exit()`** ——
+ * 宿主和其他插件可能还有自己的收尾，抢先退出会打断它们。
+ *
+ * 记忆侧用 `disposeMemory()` 而不是 `flushMemory()`：前者会把攒批的
+ * 访问计数一并刷出去，并停掉那个 3 秒定时器（定时器不清的话，
+ * 进程退出瞬间还可能触发一次多余的写盘）。
+ *
+ * logger 用包装对象而不是直接传 `globalThis.logger`：加载时它可能还没挂上，
+ * 包一层才能在真正调用时取到最新的。
+ */
+const shutdown = createShutdown({
+  logger: {
+    info: (...args) => globalThis.logger?.info?.(...args),
+    warn: (...args) => globalThis.logger?.warn?.(...args),
+    error: (...args) => globalThis.logger?.error?.(...args),
+  },
+  tasks: [
+    { name: 'memory', run: () => disposeMemory() },
+    { name: 'config-watcher', run: () => config.unwatch() },
+  ],
+})
+installShutdownHooks(shutdown)
+
+export { apps, shutdown }

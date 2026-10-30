@@ -8,7 +8,9 @@
 - 零原生依赖（不需要 sqlite3 / sharp / nodejieba），`pnpm i` 只装一个 `js-yaml`
 - 支持 TRSS-Yunzai，适配 [锅巴面板](https://gitee.com/guoba-yunzai/guoba-plugin) 可视化配置
 - 六道闸门控制「说不说」：去重 → 触发 → 上下文 → 语义把关 → 防自曝 → 拟人化发送
-- 附完整部署文档、223 项单测与 58 项仿真测试
+- 人设可结构化描述，也可以**给每个群单独指定**
+- 群记忆有类型化 TTL、冲突消解和访问强化，不像流水账
+- 附完整部署文档、350 项单测与 74 项仿真测试
 
 ## 它和普通 AI 插件的区别
 
@@ -22,7 +24,8 @@
 | 防自曝 | 回复里出现「我是 AI」「我的训练数据」时这一轮不发 |
 | 去重与回声 | 挡住协议端重投，以及「我回我自己」的死循环 |
 | 拟人化发送 | 按标点分条、按字数算打字延迟、不引用原消息 |
-| 群记忆 | 记忆由回复顺带产出，不额外调用接口 |
+| 群记忆 | 记忆由回复顺带产出；按类型过期，同一个人换说法会消解旧条目 |
+| 人设 | 支持结构化字段（身份/说话方式）；可给每个群单独指定 |
 
 ---
 
@@ -69,7 +72,10 @@
 │   ├── TRSS-Yunzai-LuckyLilliaBot-部署指南.md
 │   ├── 模拟测试报告-TRSS-LLBot-伪人插件.md
 │   ├── fatfish-可借鉴点分析.md
-│   └── 审核报告-v1.3.0.md
+│   ├── 审核报告-v1.3.0.md
+│   ├── 人格与长期记忆方案.md
+│   ├── st-memory-可借鉴点分析.md
+│   └── 记忆方案-Yunzai适配.md
 └── chatgpt-bym/               # 插件本体（整个目录放进云崽 plugins/ 即可）
     ├── INSTALL.md             # 安装教程
     ├── GUOBA.md               # 锅巴面板适配说明与分析
@@ -82,7 +88,7 @@
     ├── presets/               # 人设文件
     ├── config/
     │   └── config.example.yaml
-    └── tests/                 # 223 项自测（不需要云崽宿主）
+    └── tests/                 # 350 项自测（不需要云崽宿主）
 ```
 
 ---
@@ -125,6 +131,9 @@ llm:
 | [模拟测试报告](./docs/模拟测试报告-TRSS-LLBot-伪人插件.md) | 33 个场景的测试过程、发现的问题与修复 |
 | [可借鉴点分析](./docs/fatfish-可借鉴点分析.md) | 同类项目 fatfish-qq-bot 的架构对比，8 处借鉴点的取舍 |
 | [审核报告](./docs/审核报告-v1.3.0.md) | 两轮代码审核共 17 条问题，含复现探针与修复记录 |
+| [人格与长期记忆方案](./docs/人格与长期记忆方案.md) | 人设分层与记忆三层的设计，含实测打分数据与分期计划 |
+| [st-memory 可借鉴点分析](./docs/st-memory-可借鉴点分析.md) | SillyTavern 表格记忆插件的机制拆解，与另外两种记忆方案的对比 |
+| [记忆方案 · Yunzai 适配](./docs/记忆方案-Yunzai适配.md) | 落到 TRSS-Yunzai 实际环境：pm2 限制、热更新、退出钩子、落地风险 |
 
 ---
 
@@ -134,18 +143,24 @@ llm:
 cd chatgpt-bym
 node tests/smoke.mjs       # 44 项：配置、分段、触发闸门、冷却退配额、记忆、发送
 node tests/llm.mjs         # 10 项：端点归一化、请求体、流式、重试、换渠道
-node tests/guoba.mjs       # 23 项：锅巴契约、schema 合法性、读写往返
-node tests/config.mjs      # 31 项：扫源码验证每个 config.xxx 都能解析、数组类型修正
+node tests/guoba.mjs       # 29 项：锅巴契约、schema 合法性、读写往返、密码框保护
+node tests/config.mjs      # 55 项：扫源码验证、数组修正、损坏保护、路径迁移、危险输入
 node tests/guard.mjs       # 31 项：出站守卫，必拦句式、不误伤、判定降级
 node tests/dedup.mjs       # 17 项：去重与回声，TTL 过期、硬上限
 node tests/budget.mjs      # 15 项：上下文裁剪顺序与边界
 node tests/gate.mjs        # 26 项：语义把关，打分解析、阈值、失败放行
-node tests/replyParser.mjs # 26 项：JSON 契约解析与六种坏输出的退化
+node tests/replyParser.mjs # 28 项：JSON 契约解析与六种坏输出的退化
+node tests/lifecycle.mjs   # 16 项：退出收尾，幂等、失败隔离、超时保护
+node tests/memory.mjs      # 51 项：门槛、TTL、冲突消解、旧数据兼容、注入防护
+node tests/preset.mjs      # 28 项：人设结构化字段、群级绑定、prompt 拼装、警告去重
+
+# 上面 350 项是回归测试；下面这个是审核探针，按报告逐条验证，不参与计数
+node tests/audit-probes.mjs
 ```
 
-合计 **223 项**，不需要云崽，也不需要真实 API Key（测试会起本地假服务并隔离配置目录）。
+合计 **350 项**，不需要云崽，也不需要真实 API Key（测试会起本地假服务并隔离配置目录）。
 
-另有 `sim-lab/` 里的 58 项仿真（协议层 7 + 业务层 51），需要 TRSS 宿主桩件。
+另有 74 项仿真（协议层 7 + 业务层 59 + A 期验收 8），需要 TRSS 宿主桩件。那个环境在 `sim-lab/`，**不随仓库分发**（内含插件副本与 node_modules），要跑得自己按 `sim-lab/sync.mjs` 的方式搭。
 
 ---
 

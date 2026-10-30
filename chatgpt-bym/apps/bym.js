@@ -6,7 +6,7 @@ import { displayName, messageToText } from '../utils/message.js'
 import { checkIncoming } from '../utils/dedup.js'
 import { sendHumanized } from '../utils/humanize.js'
 import { generateReply } from '../models/chatService.js'
-import { extractFacts, addFact, flushMemory } from '../models/memory.js'
+import { extractFacts, addFact, flushMemory, disposeMemory } from '../models/memory.js'
 
 /**
  * 伪人模式主入口。
@@ -32,6 +32,37 @@ export class Bym extends plugin {
         },
       ],
     })
+  }
+
+  /**
+   * 宿主加载时的初始化钩子。
+   *
+   * TRSS 的加载器会先 `new` 一个实例、调 `init()`，**只有在这里用 `addCleanup`
+   * 登记过的清理函数**才会在卸载或热更新时被调用（loader.js 的 `disposeInitializers`，
+   * 而且会 await 返回的 Promise）。
+   *
+   * 不登记的话，`index.js` 里 `config.load().watch()` 注册的 `fs.watchFile`
+   * 永远不会被解绑 —— 改一次插件文件就多一个回调，改十次挂十个，
+   * 之后每次改配置都会触发多次 `load()`。
+   *
+   * 顺便在卸载时把记忆刷盘：热更新会重新 import 整个模块，内存里未落盘的
+   * 那几条记忆会跟着清空。热更新比进程退出更频繁（改文件就触发）。
+   *
+   * 用 `disposeMemory()` 而不是 `flushMemory()`：访问强化的计数是攒批写的，
+   * 而且背后挂着一个 3 秒定时器。定时器不清掉，旧模块实例会在热更新之后
+   * 用它的旧 store 整份覆盖新模块刚写下去的数据 —— 那是数据回滚，不是丢几条。
+   *
+   * 第二个参数是 restore：热更新失败时把监听挂回去。
+   * Miao 分支没有 addCleanup，判空跳过（那边靠进程重启清理）。
+   */
+  init () {
+    this.addCleanup?.(
+      async () => {
+        config.unwatch()
+        await disposeMemory()
+      },
+      () => config.watch(),
+    )
   }
 
   /**
@@ -136,7 +167,8 @@ export class Bym extends plugin {
  * 记忆被上游悄悄丢掉：测试绿了，功能却没生效。
  */
 function saveMemory (e, reply, text) {
-  if (!config.memory.enable || config.memory.extract === false) return
+  // write 是主开关，extract 是兼容老配置的（extract:false 的升级用户不该突然开始写）
+  if (!config.memory.enable || config.memory.write === false || config.memory.extract === false) return
 
   // 优先用回复里顺带产出的条目（零额外调用）
   if (reply.memory?.length) {
@@ -150,6 +182,12 @@ function saveMemory (e, reply, text) {
         // importance 来自模型（契约里可选），没给就是 0.5。
         // 这一维直接影响 queryFacts 的排序，全填同一个值等于没填。
         importance: item.importance,
+        // type 决定这条多久后失效，subject 决定它归到谁名下、和谁冲突。
+        // 两者都是可选的：模型没给就按 unknown（30 天）和「不归属任何人」处理。
+        type: item.type,
+        subject: item.subject,
+        predicate: item.predicate,
+        confidence: item.confidence,
         deferred: true,
       })) saved += 1
     }

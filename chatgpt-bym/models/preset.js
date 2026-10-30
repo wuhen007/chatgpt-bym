@@ -9,6 +9,14 @@ const yaml = YAML.default ?? YAML
 /**
  * 预设 = 人设。一个 yaml/json 文件一个预设，文件名即 ID。
  * 字段：name / system / temperature / maxTokens / recallSeconds / enabled
+ *
+ * 另有三个**可选**的结构化字段，用来替代 system 里那堆自然语言描述：
+ *   identity: { age, city, job, signature }
+ *   speech:   { style, length, catchphrases[], never[] }
+ *   persona:  { groupAware }   —— 是否在 prompt 里告诉模型「你在哪个群」
+ *
+ * 结构化不是必需的：老 yaml 只写 system 照常工作。两者同时存在时，
+ * 结构化部分在前（模型对开头更敏感），system 作为补充跟在后面。
  */
 
 const CACHE_TTL = 5000
@@ -21,12 +29,53 @@ function parseFile (filePath) {
   return data
 }
 
+function str (value) {
+  return value === undefined || value === null ? '' : String(value).trim()
+}
+
+function toList (value, max = 8) {
+  const list = Array.isArray(value) ? value : (typeof value === 'string' ? [value] : [])
+  return list.map(str).filter(Boolean).slice(0, max)
+}
+
+/**
+ * 结构化身份。全空时返回 null —— 否则模板会拼出「你是小张，岁，在做。」这种句子，
+ * 比不写结构化字段更糟。
+ */
+function normalizeIdentity (value) {
+  if (!value || typeof value !== 'object') return null
+  const identity = {
+    age: str(value.age),
+    city: str(value.city),
+    job: str(value.job),
+    signature: str(value.signature),
+  }
+  return Object.values(identity).some(Boolean) ? identity : null
+}
+
+function normalizeSpeech (value) {
+  if (!value || typeof value !== 'object') return null
+  const speech = {
+    style: str(value.style),
+    length: str(value.length),
+    catchphrases: toList(value.catchphrases),
+    never: toList(value.never),
+  }
+  const has = speech.style || speech.length || speech.catchphrases.length || speech.never.length
+  return has ? speech : null
+}
+
 function normalize (id, data) {
   const system = String(data.system || data.prompt || '').trim()
   return {
     id,
     name: String(data.name || id),
     system,
+    identity: normalizeIdentity(data.identity),
+    speech: normalizeSpeech(data.speech),
+    // 默认 true：多知道一个群名只会让发言更贴切，不会跑偏。
+    // 显式 false 才关，用于调试时固定 prompt 便于对比输出差异。
+    groupAware: data.persona?.groupAware !== false,
     temperature: Number.isFinite(data.temperature) ? data.temperature : undefined,
     maxTokens: Number.isFinite(data.maxTokens) ? data.maxTokens : undefined,
     recallSeconds: Number.isFinite(data.recallSeconds) ? data.recallSeconds : undefined,
@@ -89,10 +138,88 @@ export function pickPresetByKeywords (text, rules = []) {
 }
 
 /**
- * 解析出本次要用人设：关键词规则 > 配置默认 > 兜底内置人设。
+ * 已经警告过「绑的人设不存在」的 groupId。
+ *
+ * 这个函数在每轮发言时都会调用。没有去重的话，一个绑错人设的群
+ * 会按发言频率一直刷同一条 warn，把真正的错误盖掉。
+ * 绑定恢复正常后把这个群从集合里删掉，下次再绑错还能再提示一次。
+ */
+const warnedMissingPreset = new Set()
+
+/**
+ * 取本群绑定的人设。
+ *
+ * 绑了但人设不存在时**返回 null 并告警**，而不是静默返回空：
+ * 用户 `#bym 人设 抄错的名字` 之后如果毫无反馈，会以为切换成功了，
+ * 然后困惑于「为什么群里说话没变」。
+ */
+export function getGroupPreset (groupId) {
+  const map = config.speaking.groupPresets
+  if (!groupId || !map || typeof map !== 'object') return null
+  const id = map[String(groupId)]
+  if (!id) return null
+  const preset = getPreset(id)
+  if (!preset) {
+    const key = `${groupId}:${id}`
+    if (!warnedMissingPreset.has(key)) {
+      warnedMissingPreset.add(key)
+      globalThis.logger?.warn?.(`[bym] 群 ${groupId} 绑定的人设「${id}」不存在（文件缺失或 enabled: false），已退回默认人设。修好之前不再重复提示`)
+    }
+    return null
+  }
+  warnedMissingPreset.delete(`${groupId}:${id}`)
+  return preset
+}
+
+/**
+ * 写群级人设绑定。
+ *
+ * 刻意整段替换而不是 `config.set('speaking.groupPresets.123456', ...)`：
+ * 群号作为路径片段会被 `.` 切错（虽然 QQ 群号是纯数字，但这个函数也会被
+ * 指令层用任意字符串调用）。整段读改写只多一次对象拷贝，没有这类风险。
+ *
+ * @param {string|number} groupId
+ * @param {string|null} presetId 传 null / 'off' / 空 表示解绑
+ * @returns {{ok: boolean, id?: string, reason?: string}}
+ */
+export function setGroupPreset (groupId, presetId) {
+  const key = String(groupId || '').trim()
+  if (!key) return { ok: false, reason: '缺少群号' }
+
+  const map = { ...(config.speaking.groupPresets || {}) }
+  const target = String(presetId || '').trim()
+
+  if (!target || target.toLowerCase() === 'off' || target === '取消') {
+    delete map[key]
+    if (config.set('speaking.groupPresets', map) === false) {
+      return { ok: false, reason: '配置写入失败（配置文件处于只读保护模式，见日志）' }
+    }
+    return { ok: true, id: null }
+  }
+
+  if (!getPreset(target)) {
+    return { ok: false, reason: `人设「${target}」不存在` }
+  }
+
+  map[key] = target
+  // set 会在只读保护模式下拒绝写盘并返回 false
+  if (config.set('speaking.groupPresets', map) === false) {
+    return { ok: false, reason: '配置写入失败（配置文件处于只读保护模式，说明上次解析失败过，见日志）' }
+  }
+  return { ok: true, id: target }
+}
+
+/**
+ * 解析出本次要用人设。优先级：
+ *
+ *   群绑定 > 关键词规则 > 默认 ID > 兜底内置人设
+ *
  * 最后一个兜底很重要：预设目录被清空时插件不该哑掉。
  */
-export function resolvePreset (text) {
+export function resolvePreset (text, groupId) {
+  const byGroup = getGroupPreset(groupId)
+  if (byGroup) return byGroup
+
   const byKeyword = pickPresetByKeywords(text, config.speaking.presetMap)
   if (byKeyword) return byKeyword
 
@@ -104,6 +231,7 @@ export function resolvePreset (text) {
     name: '内置默认',
     system: FALLBACK_SYSTEM,
     enabled: true,
+    groupAware: true,
   }
 }
 
