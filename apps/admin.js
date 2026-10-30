@@ -1,10 +1,13 @@
 import plugin from '../../../lib/plugins/plugin.js'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { config } from '../config/config.js'
 import { loadPresets, setGroupPreset } from '../models/preset.js'
 import { clearMemory, memoryStats, getProfile, setProfile } from '../models/memory.js'
 import { rateStats, resetRate } from '../utils/rateLimit.js'
 import { clearContextCache } from '../utils/groupContext.js'
 import { dryRun } from '../models/chatService.js'
+import { update as runUpdate, formatUpdate, pluginRoot } from '../utils/updater.js'
 
 function escapeRegExp (value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -51,6 +54,9 @@ export class BymAdmin extends plugin {
         { reg: `^${prefix}\\s*(清空|清除)记忆$`, fnc: 'clearMemoryCmd', permission: 'master' },
         { reg: `^${prefix}\\s*人设\\s*([\\s\\S]*)$`, fnc: 'preset', permission: 'master' },
         { reg: `^${prefix}\\s*画像\\s*([\\s\\S]*)$`, fnc: 'profile', permission: 'master' },
+        // 云崽生态习惯把这类指令挂在插件名下（#xxx更新），所以不带 #bym 前缀也能用
+        { reg: '^[#＃]?\\s*伪人更新\\s*$', fnc: 'update', permission: 'master' },
+        { reg: `^${prefix}\\s*更新\\s*$`, fnc: 'update', permission: 'master' },
       ],
     })
   }
@@ -297,6 +303,20 @@ export class BymAdmin extends plugin {
       return true
     }
     await e.reply(text ? `已更新本群画像（${result.about.length} 字）：\n${result.about}` : '已清空本群画像')
+    return true
+  }
+
+  /**
+   * `#伪人更新` / `#bym 更新` —— 拉取远程代码。
+   *
+   * 更新代码不会热生效：Node 已经加载过的模块不会因为文件变了就重载，
+   * 所以更新完必须重启云崽。这里只负责把「更新了什么、要不要装依赖」说清楚，
+   * 不替用户重启 —— 整个机器人瞬间掉线几秒，不该由一条群消息静默触发。
+   */
+  async update (e) {
+    await e.reply('正在检查插件更新…')
+    const result = await runUpdate(pluginRoot)
+    await e.reply(formatUpdate(result))
     return true
   }
 }
