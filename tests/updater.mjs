@@ -153,7 +153,8 @@ await test('本地有分叉提交时不硬合并，报 conflict', async () => {
 
 console.log('\n[5] 注入命令执行器（离线覆盖网络分支）')
 await test('fetch 失败报 network，带原始输出', async () => {
-  // 真跑一遍其他命令，只在 fetch 上失败 —— 模拟 GitHub 连不上
+  // 真跑一遍其他命令，只在 fetch 上失败 —— 模拟 GitHub 连不上。
+  // 注意返回形状必须是 { stdout, stderr }，和 promisify(exec) 一致
   const fakeRun = async (cmd) => {
     if (cmd.startsWith('git fetch')) {
       const err = new Error('Command failed')
@@ -161,7 +162,8 @@ await test('fetch 失败报 network，带原始输出', async () => {
       err.stderr = 'fatal: unable to access \'https://github.com/\': Could not resolve host'
       throw err
     }
-    return execSync(cmd, { cwd: workPath, env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] })
+    const out = execSync(cmd, { cwd: workPath, env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] })
+    return { stdout: String(out || ''), stderr: '' }
   }
   const r = await update(workPath, { runCmd: fakeRun })
   assert.equal(r.status, 'network')
@@ -170,13 +172,35 @@ await test('fetch 失败报 network，带原始输出', async () => {
   assert.match(text, /连接远程仓库失败/)
   assert.match(text, /Could not resolve host/)
 })
+await test('并发调用被锁挡住，报 busy', async () => {
+  // [4] 的冲突用例让 work 处在本地分叉状态，先对齐远程，否则这里的 pull 必然 conflict
+  git('fetch origin master', workPath)
+  git('reset --hard origin/master', workPath)
+  // 慢命令撑住第一调用的执行窗口，第二个并发调用应直接返回 busy
+  const slowRun = async (cmd) => {
+    if (cmd.startsWith('git fetch') || cmd.startsWith('git pull')) {
+      await new Promise(r => setTimeout(r, 250))
+    }
+    const out = execSync(cmd, { cwd: workPath, env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] })
+    return { stdout: String(out || ''), stderr: '' }
+  }
+  pushCommit('feat: 并发锁验证', { 'docs/lock.md': 'x\n' })
+  const [first, second] = await Promise.all([
+    update(workPath, { runCmd: slowRun }),
+    new Promise(resolve => setTimeout(() => update(workPath, { runCmd: slowRun }).then(resolve), 50)),
+  ])
+  assert.equal(first.status, 'updated')
+  assert.equal(second.status, 'busy')
+  assert.match(formatUpdate(second), /已经有一次更新在进行/)
+})
 
 console.log('\n[6] 真实插件目录')
-await test('对本插件仓库执行检查（应为 up-to-date 或 network，不能崩）', async () => {
+await test('对本插件仓库执行检查（不为崩溃，状态合法即可）', async () => {
   // 不真正拉取远程：只验证在真实目录上跑不抛异常、结果可格式化。
-  // 网络不通时是 network，通了且无新提交时是 up-to-date，两种都算通过。
+  // 开发机的插件仓库往往有未提交改动 —— 那正是 conflict 分支要保护的场景，
+  // 所以 conflict 也是合法结果，不是错误。
   const r = await update(pluginRoot)
-  assert.ok(['up-to-date', 'network', 'updated', 'no-git'].includes(r.status), `意外的状态：${r.status}`)
+  assert.ok(['up-to-date', 'network', 'updated', 'no-git', 'conflict'].includes(r.status), `意外的状态：${r.status}`)
   assert.ok(typeof formatUpdate(r) === 'string' && formatUpdate(r).length > 0)
 })
 

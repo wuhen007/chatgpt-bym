@@ -139,6 +139,12 @@ export class Bym extends plugin {
     if (reply?.blocked) {
       // 这里只记日志。群里不解释、不道歉、不发错误提示 ——
       // 伪人不说话是常态，但一旦开口解释"我刚才不该说那句话"就彻底破功了。
+      //
+      // 配额**不**退还（与上面 gate 拦截的 skipped 不同）：
+      // gate 说的是「这时候不该说话」，退了是对的；
+      // guard 拦的是「已经生成了但内容违规」，这一次尝试确实消耗了机会。
+      // 退还的话，guard.retry 重试 + 退还的组合会让同一条消息反复消耗/归还配额。
+      // 保守侧的代价是守卫误拦时会少一次发言机会，宁可如此。
       globalThis.logger?.warn?.(`[bym][guard] 本轮已拦截（${reply.blockedReason}），群 ${e.group_id}`)
       return
     }

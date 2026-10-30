@@ -54,10 +54,22 @@ function idOf (e) {
   return id === undefined || id === null || id === '' ? '' : String(id)
 }
 
+function scopeOf (e) {
+  return String(e?.group_id ?? e?.group?.group_id ?? 'priv')
+}
+
 function contentKeyOf (e, text) {
-  const scope = String(e?.group_id ?? e?.group?.group_id ?? 'priv')
   const user = String(e?.user_id ?? e?.sender?.user_id ?? 'anon')
-  return `${scope}|${user}|${String(text || '').trim()}`
+  return `${scopeOf(e)}|${user}|${String(text || '').trim()}`
+}
+
+/**
+ * 回声的键。必须带上群号：机器人只在配置的群里说话，但「它说过的话」
+ * 如果不带群号，A 群说过的一句话会把 B 群群友发的同样文本也当回声挡掉，
+ * 表现是「那个群怎么不理我」，没有任何日志线索。
+ */
+function echoKeyOf (e, plain) {
+  return `${scopeOf(e)}|${plain}`
 }
 
 /**
@@ -84,7 +96,8 @@ export function checkIncoming (e, text) {
   // ② 回声守卫。必须排在内容去重之前 —— 回声会被重投多次，
   // 排在后面的话第二次就变成「content」，日志里看不出是自己的话绕回来了。
   sweep(selfEcho, ECHO_TTL)
-  if (selfEcho.has(plain)) return { dup: 'echo' }
+  const echoKey = echoKeyOf(e, plain)
+  if (selfEcho.has(echoKey)) return { dup: 'echo' }
 
   // ③ 内容去重
   sweep(seenContent, CONTENT_TTL)
@@ -98,13 +111,15 @@ export function checkIncoming (e, text) {
 /**
  * 记下自己发出去的话，供回声守卫比对。
  * 由 sendHumanized 在每段发送成功后调用 —— 分段发的时候每段都要记，
- * 否则只能挡住最后一段的回声。
+ * 否则只能挡住最后一段的回声。键带群号，见 echoKeyOf。
+ * @param {object} e 发送时的事件，用它的群号
+ * @param {string} text 发出去的那一段
  */
-export function rememberSelf (text) {
+export function rememberSelf (e, text) {
   const plain = String(text || '').trim()
   if (!plain) return
   sweep(selfEcho, ECHO_TTL)
-  selfEcho.set(plain, now())
+  selfEcho.set(echoKeyOf(e, plain), now())
 }
 
 /** 测试与「清空记忆」用：丢弃全部记录 */

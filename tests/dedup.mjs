@@ -75,22 +75,31 @@ await test('私聊（无 group_id）单独成域', () => {
 console.log('\n[3] 回声守卫')
 await test('自己刚发过的话被推回来时丢弃', () => {
   reset()
-  rememberSelf('好耶，那就这么定了')
+  rememberSelf(ev({ id: 50 }), '好耶，那就这么定了')
   assert.equal(checkIncoming(ev({ id: 99, uid: 'bot' }), '好耶，那就这么定了').dup, 'echo')
 })
 await test('回声不区分发送者（协议端会伪装成别人）', () => {
   reset()
-  rememberSelf('我来了')
+  rememberSelf(ev({ id: 51 }), '我来了')
   assert.equal(checkIncoming(ev({ id: 1, uid: '随便谁' }), '我来了').dup, 'echo')
+})
+await test('回声按群隔离：A 群说过的话不挡 B 群', () => {
+  reset()
+  rememberSelf(ev({ id: 60, gid: '100' }), '哈哈哈这波可以')
+  assert.equal(
+    checkIncoming(ev({ id: 61, gid: '200', uid: '8' }), '哈哈哈这波可以').dup,
+    null,
+    'B 群群友发同样的文本不该被当回声'
+  )
 })
 await test('空白内容不会被当成回声', () => {
   reset()
-  rememberSelf('   ')
+  rememberSelf(ev({ id: 52 }), '   ')
   assert.equal(dedupStats().echoes, 0)
 })
 await test('回声窗口过期后正常放行', () => {
   reset()
-  rememberSelf('哈哈哈')
+  rememberSelf(ev({ id: 53 }), '哈哈哈')
   tick(ECHO_TTL + 1000)
   assert.equal(checkIncoming(ev({ id: 2, uid: '9' }), '哈哈哈').dup, null)
 })
@@ -131,7 +140,7 @@ await test('真实死循环：自己发的被推回来 → 不再触发', () => 
   reset()
   // 第一轮：群友说话，我们回复并记录
   assert.equal(checkIncoming(ev({ id: 1 }), '今天好热').dup, null)
-  rememberSelf('热死了，空调开到 16 度')
+  rememberSelf(ev({ id: 54 }), '热死了，空调开到 16 度')
   // 协议端把我们的消息推回来
   assert.equal(checkIncoming(ev({ id: 2, uid: 'bot' }), '热死了，空调开到 16 度').dup, 'echo')
   // 再来一次（多适配器场景）
@@ -140,7 +149,7 @@ await test('真实死循环：自己发的被推回来 → 不再触发', () => 
 await test('resetDedup 清干净', () => {
   reset()
   checkIncoming(ev({ id: 1 }), 'a')
-  rememberSelf('b')
+  rememberSelf(ev({ id: 55 }), 'b')
   assert.deepEqual(dedupStats(), { ids: 1, contents: 1, echoes: 1 })
   resetDedup()
   assert.deepEqual(dedupStats(), { ids: 0, contents: 0, echoes: 0 })

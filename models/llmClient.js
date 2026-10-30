@@ -90,8 +90,11 @@ function pickText (message) {
 /**
  * 流式解析：逐行读 SSE，边收边回调，最后返回聚合结果。
  * 有的中转站不发 [DONE]，靠 reader 结束兜底。
+ *
+ * onActivity 在每收到一个有效数据块时触发，供上层重置超时计时器 ——
+ * 流式的总时长只取决于回复多长，「两个块之间隔了多久」才说明连接是不是死了。
  */
-async function readStream (response, onDelta) {
+async function readStream (response, onDelta, onActivity) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
@@ -103,6 +106,7 @@ async function readStream (response, onDelta) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
+      onActivity?.()
 
       let newlineIndex
       while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
@@ -159,7 +163,17 @@ export async function chatCompletion ({ messages, llm, stream = llm.stream === t
       const controller = new AbortController()
       const onAbort = () => controller.abort()
       signal?.addEventListener('abort', onAbort, { once: true })
-      const timer = setTimeout(() => controller.abort(), Math.max(5000, Number(llm.timeoutMs) || 60000))
+
+      // 非流式：超时 = 整个请求的预算。流式：超时 = 「两个数据块之间」的间隔 ——
+      // 长回复加慢 token 的总时长轻松超过一分钟，按整请求计时会把
+      // 正常的生成长回复误判成超时，然后整条重试，重试同样超时。
+      const timeoutMs = Math.max(5000, Number(llm.timeoutMs) || 60000)
+      let timer
+      const restartTimer = (ms = timeoutMs) => {
+        clearTimeout(timer)
+        timer = setTimeout(() => controller.abort(), ms)
+      }
+      restartTimer()
 
       try {
         const response = await fetch(endpointOf(channel.baseURL), {
@@ -178,7 +192,7 @@ export async function chatCompletion ({ messages, llm, stream = llm.stream === t
         }
 
         if (stream) {
-          const result = await readStream(response, onDelta)
+          const result = await readStream(response, onDelta, () => restartTimer())
           if (result.text.trim()) {
             return { ...result, model: channel.model, channel: channel.baseURL, usage: null }
           }

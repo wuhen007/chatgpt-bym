@@ -98,7 +98,6 @@
 │   ├── memory.mjs               # 记忆：门槛、TTL、冲突消解、攒批落盘、注入防护（51 项）
 │   ├── preset.mjs               # 人设：结构化字段、群级绑定、prompt 拼装、警告去重（28 项）
 │   └── audit-probes.mjs         # 审核探针（不是回归测试）：跑一遍看审核报告的每条是否仍成立
-└── docs/                        # 设计文档、审核报告、部署指南（不参与运行）
 ```
 
 分层原则：**apps 只做「要不要说、说完怎么发」，models 只做「说什么」，utils 是无状态工具。**
@@ -722,24 +721,24 @@ async onMessage (e) {
 
 ```bash
 node tests/smoke.mjs       # 配置、分段、触发闸门（含被点名）、冷却退配额、记忆、预设、输出清洗、发送
-node tests/llm.mjs         # 端点归一化、请求体、流式聚合、5xx 重试、401 换渠道
+node tests/llm.mjs         # 端点归一化、请求体、流式聚合与按块间隔超时、重试、换渠道
 node tests/guoba.mjs       # 锅巴契约：schema 合法性、扁平 map 读写往返、非法 JSON 拒绝
-node tests/config.mjs      # 扫源码验证 config.xxx、数组修正、配置损坏时的只读保护、路径迁移、默认值
+node tests/config.mjs      # 扫源码验证 config.xxx、数组修正、损坏保护、路径迁移、默认值、布尔归一
 node tests/guard.mjs       # 出站守卫：必拦句式、不误伤、判定失败降级、自称身份放行
-node tests/dedup.mjs       # 去重与回声：三种重复、TTL 过期、硬上限
+node tests/dedup.mjs       # 去重与回声：三种重复、跨群隔离、TTL 过期、硬上限
 node tests/budget.mjs      # 上下文裁剪：顺序、边界、参数容错
 node tests/gate.mjs        # 语义把关：打分解析、阈值、失败放行、请求参数
 node tests/replyParser.mjs # JSON 契约：正常解析与六种坏输出的退化
 node tests/lifecycle.mjs   # 退出收尾：幂等、任务失败隔离、超时保护
 node tests/memory.mjs      # 记忆：门槛、类型化 TTL、冲突消解、访问强化、旧数据兼容
 node tests/preset.mjs      # 人设：结构化字段、群级绑定优先于关键词、警告去重
-node tests/updater.mjs     # 自更新：no-git/no-remote/最新/有更新/冲突/网络失败，用本地 bare 仓库离线测
+node tests/updater.mjs     # 自更新：no-git/最新/有更新/冲突/网络失败/并发锁，本地 bare 仓库离线测
 ```
 
-合计 **379 项**，全部不联网。另有 74 项仿真（协议层 7 + 业务层 59 + A 期验收 8）；那套环境在 `sim-lab/`，**不随仓库分发**，
+合计 **386 项**，全部不联网。另有 74 项仿真（协议层 7 + 业务层 59 + A 期验收 8）；那套环境在 `sim-lab/`，**不随仓库分发**，
 需要 TRSS 宿主桩件，跑法见该目录的 `sync.mjs` 说明。
 
-`audit-probes.mjs` 不是回归测试，它按 `docs/审核报告-v1.4.1.md` 的每一条逐个构造复现场景，
+`audit-probes.mjs` 不是回归测试，它按历次代码审核报告的每一条 finding 逐个构造复现场景，
 跑完看结论是否还成立（审核时用来证明「修好了」，以后改动可能让它重新失败）：
 
 ```bash
@@ -826,6 +825,25 @@ node tests/guoba.mjs   # 29 项
 ---
 
 ## 十四、变更记录
+
+### 1.4.7
+
+按 1.4.6 的代码审核报告修掉全部 5 条 Should fix + 3 条低优先级 + 3 处死代码。
+每条都有探针（先复现、修完反转），探针在 `sim-lab/sim/audit-probes-v146.js`（不随仓库分发）。
+
+**中优先级（5 条）**
+
+| 问题 | 修法 |
+|---|---|
+| 流式模式超时按「整请求」计时，长回复 + 慢 token 会被误判超时后整条重试 | 改成按「两个数据块之间」重置计时。新增慢 chunk 测试：总时长超限但每块及时到达时应完整收完 |
+| 发送者群名片不净化，名片带换行时能改写 `#bym` 引导语的 prompt 结构 | `displayName` / `groupNameOf` 压掉换行，与群上下文表格的转义对齐 |
+| 回声表不分群，A 群机器人说过的话会挡住 B 群群友的同样文本（90 秒内） | 回声键加群号 |
+| 布尔配置的判断写法不统一，手写 yaml 写 `'true'` 字符串时严格判断静默失效 | `config.set / apply` 写入时对布尔字段做类型归一（从 DEFAULTS 自动收集布尔键路径） |
+| 图片下载先读进内存再检查大小 | 读取前按 content-length 预检；计时器挪进 finally |
+
+**低优先级（3 条）**：`#伪人更新` 加并发锁（第二个调用直接回 busy）；图片下载的计时器进 finally（与上条合并）；guard 拦截不退配额的设计取舍补了注释（行为不变）。
+
+**死代码（Lean）**：删掉零调用的 `textToSegments`、无人消费的 `usedJson` 字段。报告里建议删的 `onDelta` **保留**——复查发现它有测试覆盖（流式增量回调），是能工作的特性不是死代码。
 
 ### 1.4.6
 
@@ -914,7 +932,7 @@ node tests/guoba.mjs   # 29 项
 
 ### 1.4.2
 
-按审核报告（`docs/审核报告-v1.4.1.md`）修了 3 条 Must fix + 3 条 Should fix + 4 条小问题。
+按当时的审核报告（已随 docs/ 目录移除）修了 3 条 Must fix + 3 条 Should fix + 4 条小问题。
 
 **安全（2 条）**
 
@@ -1070,7 +1088,7 @@ B 期：让已有的记忆真正能用。核心是**一个判断条件**，其�
 
 ### 1.3.1
 
-按 Ponytail 审核报告（`../docs/审核报告-v1.3.0.md`）修完 17 条 finding。九条属于「改完不生效／根本没生效」这类看不见的问题：
+按 Ponytail 审核报告修完 17 条 finding。九条属于「改完不生效／根本没生效」这类看不见的问题：
 
 | 类型 | 变化 |
 |---|---|

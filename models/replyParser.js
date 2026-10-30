@@ -93,12 +93,12 @@ function cleanMemory (value) {
 /**
  * @param {string} raw 模型原始输出
  * @param {{expectMemory?: boolean}} [options] expectMemory=true 时才尝试按 JSON 解析
- * @returns {{say: string, memory: string[], degraded: boolean, usedJson: boolean}}
+ * @returns {{say: string, memory: string[], degraded: boolean}}
  */
 export function parseReply (raw, { expectMemory = false } = {}) {
   const text = String(raw || '').trim()
-  if (!expectMemory) return { say: text, memory: [], degraded: false, usedJson: false }
-  if (!text) return { say: '', memory: [], degraded: false, usedJson: false }
+  if (!expectMemory) return { say: text, memory: [], degraded: false }
+  if (!text) return { say: '', memory: [], degraded: false }
 
   const obj = extractJson(text)
 
@@ -107,16 +107,16 @@ export function parseReply (raw, { expectMemory = false } = {}) {
     const say = obj.say.trim()
     // say 为空说明模型把话说丢了，这种「有 JSON 没内容」的情况按失败处理
     if (say) {
-      return { say, memory: cleanMemory(obj.memory), degraded: false, usedJson: true }
+      return { say, memory: cleanMemory(obj.memory), degraded: false }
     }
   }
 
   // ② 模型偷懒只给了 memory，没给 say —— 说明它把契约理解偏了，
   //    但记忆是有效的，收下；正文没有，只能算失败
   if (obj && !obj.say && obj.memory !== undefined) {
-    return { say: '', memory: cleanMemory(obj.memory), degraded: true, usedJson: false }
+    return { say: '', memory: cleanMemory(obj.memory), degraded: true }
   }
 
   // ③ 完全没按契约来：整段当回复，记忆这一轮放弃
-  return { say: text, memory: [], degraded: true, usedJson: false }
+  return { say: text, memory: [], degraded: true }
 }

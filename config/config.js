@@ -336,6 +336,40 @@ function isPlainObject (value) {
  */
 const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
 
+/**
+ * DEFAULTS 里所有布尔配置的键路径。apply/set 写入时用它做类型归一。
+ *
+ * 为什么要归一：判断写法不统一（有的 `=== true`、有的 `!== false`），
+ * 手写 yaml 把布尔写成带引号的字符串时，严格判断会静默失效 ——
+ * 面板看起来开了，实际还是拦。锅巴的 Switch 组件传的是真布尔不受影响，
+ * 归一是给手写配置的用户兜底。
+ */
+const BOOLEAN_PATHS = new Set((() => {
+  const paths = []
+  const walk = (obj, prefix = '') => {
+    for (const [key, value] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${key}` : key
+      if (typeof value === 'boolean') paths.push(path)
+      else if (value && typeof value === 'object') walk(value, path)
+    }
+  }
+  walk(DEFAULTS)
+  return paths
+})())
+
+/**
+ * 写入前的单值归一。目前只处理布尔字段上的字符串 'true' / 'false'；
+ * 数值字段（如 probability）全库都用 Number() 现场转换，容忍字符串，不需要这里管。
+ */
+function normalizeValue (keyPath, value) {
+  if (BOOLEAN_PATHS.has(String(keyPath)) && typeof value === 'string') {
+    const text = value.trim().toLowerCase()
+    if (text === 'true') return true
+    if (text === 'false') return false
+  }
+  return value
+}
+
 function isSafePath (keys) {
   return Array.isArray(keys) && keys.every(key => !FORBIDDEN_SEGMENTS.has(key))
 }
@@ -632,7 +666,7 @@ class BymConfig {
       if (!isPlainObject(target[key])) target[key] = {}
       target = target[key]
     }
-    target[last] = value
+    target[last] = normalizeValue(keyPath, value)
     return this.save()
   }
 
@@ -660,7 +694,7 @@ class BymConfig {
         if (!isPlainObject(target[key])) target[key] = {}
         target = target[key]
       }
-      target[last] = value
+      target[last] = normalizeValue(keyPath, value)
     }
     return this.save()
   }

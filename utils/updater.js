@@ -23,6 +23,9 @@ export const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.ur
 /** 单条 git 命令的超时。fetch 网络慢，给足一点 */
 const CMD_TIMEOUT = 90_000
 
+/** 已有一次更新在进行中。两个主人同时发指令时，git 操作会互相踩 */
+let inFlight = false
+
 /**
  * 跑一条 git 命令。失败不抛 —— 上层要的是「带原因的结果」而不是中断。
  * @returns {Promise<{ok: boolean, stdout: string, stderr: string, code?: number}>}
@@ -61,6 +64,20 @@ async function git (args, { cwd, runCmd } = {}) {
  * }>}
  */
 export async function update (cwd = pluginRoot, { runCmd } = {}) {
+  // 并发保护：git 操作没有锁，两个同时跑 fetch/pull 会互相踩。
+  // 真实场景很少见（两个主人同时发指令），但挡一下只要一行。
+  if (inFlight) {
+    return { ok: false, status: 'busy' }
+  }
+  inFlight = true
+  try {
+    return await doUpdate(cwd, { runCmd })
+  } finally {
+    inFlight = false
+  }
+}
+
+async function doUpdate (cwd, { runCmd } = {}) {
   // zip 安装的用户没有 .git。这一步放在最前面，报错信息才对得上他们的场景
   if (!fs.existsSync(path.join(cwd, '.git'))) {
     return { ok: false, status: 'no-git' }
@@ -164,6 +181,8 @@ export function formatUpdate (result) {
       ].join('\n')
     case 'no-remote':
       return '这个插件目录没有配置远程仓库（git remote origin），无法自动更新'
+    case 'busy':
+      return '已经有一次更新在进行中，等它结束再试'
     case 'conflict':
       return [
         '本地文件有改动，直接更新会产生冲突，已中止（你的改动没有被覆盖）。',

@@ -102,16 +102,31 @@ export async function fetchImageAsDataUrl (url) {
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 15000)
-    const response = await fetch(url, { signal: controller.signal })
-    clearTimeout(timer)
+    let buffer
+    try {
+      const response = await fetch(url, { signal: controller.signal })
 
-    if (!response.ok) {
-      globalThis.logger?.debug?.(`[bym][image] 下载失败 ${response.status}: ${url.slice(0, 80)}`)
-      return null
+      if (!response.ok) {
+        globalThis.logger?.debug?.(`[bym][image] 下载失败 ${response.status}: ${url.slice(0, 80)}`)
+        return null
+      }
+
+      // 读取之前先看声明的大小。arrayBuffer() 会把整个响应读进内存，
+      // 「读完再检查」意味着一个异常响应（超大图、CDN 错误页）先占满内存再被丢弃。
+      // 没有 content-length 的响应（chunked）只能靠读完后的检查兜底。
+      const declared = Number(response.headers.get('content-length'))
+      if (Number.isFinite(declared) && declared > 0 && declared * 1.34 > maxBytes) {
+        globalThis.logger?.debug?.(`[bym][image] 声明大小 ${Math.round(declared / 1024)} KiB 超限，跳过: ${url.slice(0, 80)}`)
+        return null
+      }
+
+      const arrayBuffer = await response.arrayBuffer()
+      buffer = Buffer.from(arrayBuffer)
+    } finally {
+      // 抛错也要清计时器，否则它空转 15 秒后 abort 一个已经废弃的 controller
+      clearTimeout(timer)
     }
 
-    const arrayBuffer = await response.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
     // base64 会比原始字节大 1/3，按编码后的体积判断更有意义
     if (buffer.length * 1.34 > maxBytes) {
       globalThis.logger?.debug?.(`[bym][image] 图片过大（${Math.round(buffer.length / 1024)} KiB），跳过`)

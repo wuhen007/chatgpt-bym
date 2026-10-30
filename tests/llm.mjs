@@ -32,6 +32,25 @@ const server = http.createServer((req, res) => {
       return
     }
 
+    if (auth.includes('slow-key') && payload.stream) {
+      // 慢 chunk：每 120ms 发一块，总时长 ~500ms。用来验证
+      // 「流式超时按块间隔计时，不按整请求计时」—— timeoutMs 300 时
+      // 按整请求必超时，按间隔则每块都及时到达、应当成功
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      const parts = ['第一', '第二', '第三', '第四']
+      let i = 0
+      const pump = setInterval(() => {
+        if (i < parts.length) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: parts[i] } }] })}\n\n`)
+          i += 1
+        } else {
+          clearInterval(pump)
+          res.end()
+        }
+      }, 120)
+      return
+    }
+
     if (payload.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' })
       const chunks = [
@@ -135,6 +154,15 @@ await test('流式逐块聚合，且无 [DONE] 也能收尾', async () => {
   assert.equal(result.text, '那就这样吧')
   assert.deepEqual(deltas, ['那', '就这样吧'])
   assert.match(result.reasoning, /先想一下/)
+})
+await test('流式超时按块间隔计：总时长超限但每块及时到达时不中断', async () => {
+  // 总时长 ~500ms > timeoutMs 300。按整请求计时这里会 abort 后重试并最终失败；
+  // 按块间隔计时（每 120ms 一块）应当完整收完
+  const result = await chatCompletion({
+    messages: [{ role: 'user', content: 'hi' }],
+    llm: { ...baseLLM, apiKey: 'slow-key', stream: true, timeoutMs: 300 },
+  })
+  assert.equal(result.text, '第一第二第三第四')
 })
 
 console.log('\n[3] 容错')

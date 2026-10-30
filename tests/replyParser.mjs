@@ -28,7 +28,6 @@ test('原样返回，不做任何解析', () => {
   assert.equal(r.say, '行吧，那就这么定了。')
   assert.deepEqual(facts(r), [])
   assert.equal(r.degraded, false)
-  assert.equal(r.usedJson, false)
 })
 test('即使模型给了 JSON，没开记忆也当纯文本发出去', () => {
   const r = parseReply('{"say":"你好","memory":["x"]}')
@@ -46,7 +45,6 @@ test('标准 JSON 拆出 say 和 memory', () => {
   assert.equal(r.say, '我也觉得')
   assert.deepEqual(facts(r), ['张三在字节做后端'])
   assert.equal(r.degraded, false)
-  assert.equal(r.usedJson, true)
 })
 test('say 里的换行保留（分段发送要靠它）', () => {
   const r = parseReply('{"say":"第一句\\n第二句","memory":[]}', { expectMemory: true })
@@ -55,7 +53,6 @@ test('say 里的换行保留（分段发送要靠它）', () => {
 test('代码块包裹也能解析', () => {
   const r = parseReply('```json\n{"say":"好","memory":[]}\n```', { expectMemory: true })
   assert.equal(r.say, '好')
-  assert.equal(r.usedJson, true)
 })
 test('前后有解释文字也能抠出来', () => {
   const r = parseReply('好的，这是回复：\n{"say":"收到","memory":[]}\n希望有帮助', { expectMemory: true })
@@ -130,7 +127,6 @@ test('只有 memory 没有 say → 记忆收下，正文为空', () => {
   const r = parseReply('{"memory":["李四搬去杭州了"]}', { expectMemory: true })
   assert.equal(r.say, '')
   assert.deepEqual(facts(r), ['李四搬去杭州了'])
-  assert.equal(r.usedJson, false)
 })
 test('say 不是字符串（给了数组）→ 退化', () => {
   const r = parseReply('{"say":["第一句","第二句"]}', { expectMemory: true })

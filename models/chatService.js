@@ -78,10 +78,10 @@ export function buildSystemPrompt (preset, groupName) {
   return [prefix, ...sections].filter(Boolean).join('\n\n')
 }
 
-/** 群名，拿不到时返回空串（让调用方决定用不用） */
+/** 群名，拿不到时返回空串（让调用方决定用不用）。压掉换行，理由同 displayName */
 function groupNameOf (e) {
   const name = e?.group?.name || e?.group_name || ''
-  return String(name || '').trim()
+  return String(name || '').replace(/\s+/g, ' ').trim()
 }
 
 /**

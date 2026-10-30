@@ -130,6 +130,21 @@ test('guard.retry 默认 false（不额外多一次请求）', () => {
 test('guard.allowSelfClaim 默认 false（人设不该自称 AI）', () => {
   assert.equal(config.guard.allowSelfClaim, false)
 })
+test('布尔字段写字符串会被归一（手写 yaml 带引号时不再静默失效）', () => {
+  // 手写 yaml 带引号时 js-yaml 会解析成字符串。以前 allowSelfClaim === true
+  // 这种严格判断会静默失效；现在写入时统一转回布尔
+  config.set('guard.allowSelfClaim', 'true')
+  assert.equal(config.guard.allowSelfClaim, true)
+  assert.equal(typeof config.guard.allowSelfClaim, 'boolean')
+  config.apply({ 'guard.allowSelfClaim': 'false' })
+  assert.equal(config.guard.allowSelfClaim, false)
+  config.set('guard.allowSelfClaim', false)
+})
+test('非布尔字段不受归一影响', () => {
+  config.set('llm.apiKey', 'true')
+  assert.equal(config.llm.apiKey, 'true')
+  config.set('llm.apiKey', '')
+})
 test('默认人设是大肥鱼', () => {
   assert.equal(config.speaking.defaultPresetId, 'bym_dafeiyu')
 })

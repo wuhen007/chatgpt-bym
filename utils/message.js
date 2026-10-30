@@ -162,13 +162,11 @@ export function isAtBot (e) {
 
 /** 取发送者展示名：群名片 > 昵称 > QQ 号 */
 export function displayName (e) {
-  return e?.sender?.card || e?.sender?.nickname || String(e?.user_id || e?.sender?.user_id || '群友')
-}
-
-/** 把纯文本转成可发送的消息段。含 URL 图片时仍按文本发，避免被当成外链卡片。 */
-export function textToSegments (text) {
-  return String(text || '')
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
+  const raw = e?.sender?.card || e?.sender?.nickname || String(e?.user_id || e?.sender?.user_id || '')
+  // 群名片能走 API 设置成带换行的内容。这个名字会被拼进
+  // 「「张三」在群里直接 @ 了你」这类引导语 —— 换行会把它拆成两行，
+  // 第二行就是名片主人写的内容，等于往 prompt 里注入一行自由文本。
+  // 和群上下文表格的 renderTemplate 转义（同样压换行）对齐。
+  const name = String(raw || '').replace(/\s+/g, ' ').trim()
+  return name || '群友'
 }

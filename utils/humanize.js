@@ -155,7 +155,7 @@ export async function sendHumanized (e, text, options = {}) {
       const sent = await e.reply(segment, false)
       // 记下实际发出去的每一段，供回声守卫比对。
       // 必须逐段记：只记最后一段的话，前面几段的回声照样挡不住。
-      rememberSelf(segment)
+      rememberSelf(e, segment)
       scheduleRecall(e, sent, recallSeconds)
       sentCount++
     } catch (err) {
