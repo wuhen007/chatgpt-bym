@@ -154,6 +154,11 @@ test('@ 机器人判为 addressed（原始 OneBot 的 data 包裹）', () => {
 test('e.atBot 布尔也认', () => {
   assert.equal(isAddressed(fakeEvent({ atBot: true })), true)
 })
+test('官方 @ 事件即使没有 at 段也能识别', () => {
+  assert.equal(isAddressed(fakeEvent({ qqbot_official: true, qqbot_event: 'GROUP_AT_MESSAGE_CREATE', message: [{ type: 'image' }] })), true)
+  assert.equal(isAddressed(fakeEvent({ qqbot_official: true, qqbot_event: 'GROUP_MESSAGE_CREATE', atBot: true })), false)
+  assert.equal(isAddressed(fakeEvent({ qqbot_official: true, qqbot_full_volume: false, atBot: true })), true)
+})
 test('QQ 官方桥接的 atBot 不代表真的 @ 机器人', () => {
   assert.equal(isAddressed(fakeEvent({ atBot: true, qqbot_official: true, message: [{ type: 'image' }] })), false)
 })
@@ -180,6 +185,16 @@ test('同时 @ 了机器人和别人，也不被 ignoreAtOthers 挡掉', () => {
     message: [{ type: 'at', qq: '999' }, { type: 'at', qq: '10001' }, { type: 'text', text: ' 你们俩看下' }],
   })
   assert.equal(evaluate(e, '@机器人 @李四 你们俩看下').addressed, true)
+})
+test('官方真实 @ 文本与图片都不受概率为零影响', () => {
+  const saved = config.data.trigger.probability
+  config.data.trigger.probability = 0
+  for (const text of ['你好', '[图片]']) {
+    const r = evaluate(fakeEvent({ qqbot_official: true, qqbot_event: 'GROUP_AT_MESSAGE_CREATE', message: [{ type: 'text', text }] }), text)
+    assert.equal(r.pass, true)
+    assert.equal(r.addressed, true)
+  }
+  config.data.trigger.probability = saved
 })
 test('关掉 replyWhenAddressed 后退回概率判断（不是直接不理）', () => {
   config.data.trigger.replyWhenAddressed = false

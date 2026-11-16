@@ -82,7 +82,13 @@ export function precheck (e, text, options = {}) {
  * - 原始 OneBot：读 `elem.data.qq`
  */
 export function isAddressed (e) {
-  // QQ 官方机器人桥接会把所有群消息都标成 atBot；必须以真实 at 消息段为准。
+  // 官方 @ 事件的正文可能已被桥接去掉 @，优先认原始事件类型。
+  if (e?.qqbot_official === true) {
+    if (e.qqbot_event === 'GROUP_AT_MESSAGE_CREATE') return true
+    // 旧桥接未开启全量时只会收到 @ 事件；全量开启后不能依赖 atBot。
+    if (!e.qqbot_event && e.qqbot_full_volume === false && e.atBot === true) return true
+  }
+  // QQ 官方机器人旧桥接会把所有群消息都标成 atBot；不能单独信任此标记。
   // 其它适配器仍兼容它们提供的布尔标记。
   if (e?.atBot === true && e?.qqbot_official !== true) return true
   const selfId = String(e?.self_id || e?.bot?.uin || '')
