@@ -154,6 +154,12 @@ test('@ 机器人判为 addressed（原始 OneBot 的 data 包裹）', () => {
 test('e.atBot 布尔也认', () => {
   assert.equal(isAddressed(fakeEvent({ atBot: true })), true)
 })
+test('QQ 官方桥接的 atBot 不代表真的 @ 机器人', () => {
+  assert.equal(isAddressed(fakeEvent({ atBot: true, qqbot_official: true, message: [{ type: 'image' }] })), false)
+})
+test('QQ 官方桥接有真实 @ 段仍认作点名', () => {
+  assert.equal(isAddressed(fakeEvent({ atBot: true, qqbot_official: true, message: [{ type: 'at', qq: '999' }] })), true)
+})
 test('@ 别人不算 addressed', () => {
   const e = fakeEvent({ message: [{ type: 'at', qq: '10001' }, { type: 'text', text: ' 你看' }] })
   assert.equal(isAddressed(e), false)

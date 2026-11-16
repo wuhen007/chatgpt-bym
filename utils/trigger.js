@@ -82,7 +82,9 @@ export function precheck (e, text, options = {}) {
  * - 原始 OneBot：读 `elem.data.qq`
  */
 export function isAddressed (e) {
-  if (e?.atBot === true) return true
+  // QQ 官方机器人桥接会把所有群消息都标成 atBot；必须以真实 at 消息段为准。
+  // 其它适配器仍兼容它们提供的布尔标记。
+  if (e?.atBot === true && e?.qqbot_official !== true) return true
   const selfId = String(e?.self_id || e?.bot?.uin || '')
   if (!selfId || !Array.isArray(e?.message)) return false
   return e.message.some(elem => {
