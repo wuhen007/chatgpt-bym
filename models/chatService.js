@@ -71,8 +71,8 @@ export function buildSystemPrompt (preset, groupName) {
   const body = String(preset?.system || '').trim()
   sections.push(body)
 
-  // 最后兜底的必要说明：结构化字段只描述了「怎么说话」，没说「不要自称 AI」。
-  // 这句和结构化无关，任何预设都要带上。
+  sections.push('接话时以本轮最新消息及其紧邻对话为中心。历史记录和记忆只是理解指代的背景，不是待回答的问题；不要逐条回应历史、复述自己说过的话或主动重提已经结束的话题。最新消息很短时，结合紧邻消息理解，不要牵回更早的话题。')
+
   sections.push('记住：你是这个群里的普通成员。不要自称 AI、助手或机器人，不要输出 Markdown 列表和标题，不要解释你正在做什么。')
 
   return [prefix, ...sections].filter(Boolean).join('\n\n')
@@ -145,9 +145,8 @@ export async function generateReply (e, trigger) {
     }
   }
 
-  const memoryQuery = hasContext
-    ? groupContext.items.slice(-6).map(item => item.text).join(' ')
-    : triggerText
+  // 用本轮话题召回，避免旧历史把已经结束的话题再次注入。
+  const memoryQuery = triggerText
 
   // dryRun（`#bym 测试`）不累加访问计数：那只是管理员想看效果，
   // 不该改变「哪些记忆更常被想起」的排序。
@@ -164,8 +163,8 @@ export async function generateReply (e, trigger) {
   // 被点名叫到的人应该正面接话，而不是像平时那样「顺口插一句」。
   // 同一条 user 消息里的措辞差别，比在 system 里加一句约束更有效。
   const lead = trigger?.addressed
-    ? `「${displayName(e)}」在群里直接 @ 了你，请针对下面这句话正面回答：`
-    : `下面这条消息来自「${displayName(e)}」，请自然地接话：`
+    ? `「${displayName(e)}」在群里直接 @ 了你，请针对下面这句话正面回答（本轮最新消息，历史仅作背景）：`
+    : `下面这条最新消息来自「${displayName(e)}」，请自然地接话（优先接续这里，历史仅作背景）：`
 
   // 记忆开启时改成 JSON 契约：回话的同时顺带产出「值得记住的事」，
   // 省掉原来那次独立的抽取调用（那一轮本来就已经在调模型了）。
@@ -184,7 +183,7 @@ export async function generateReply (e, trigger) {
   // 契约本身也要算进去：它是裁剪之后才追加的，漏算的话「刚好卡线」的那一轮
   // 加上 240 多字的契约就超出预算了。
   const fit = fitBudget({
-    system: systemPrompt + (mode === 'contextual' ? contextualPrompt : lead) + (wantMemory ? MEMORY_CONTRACT : ''),
+    system: systemPrompt + lead + (mode === 'contextual' ? contextualPrompt : '') + (wantMemory ? MEMORY_CONTRACT : ''),
     groupHeader: groupContext.header,
     groupLines: groupContext.lines,
     memory: memoryPrompt,
@@ -219,16 +218,14 @@ export async function generateReply (e, trigger) {
 
   if (effectiveMode === 'contextual') {
     content.push({ type: 'text', text: contextualPrompt })
+  }
+  // 两种模式都携带最新消息，避免历史接口延迟或缓存让当前话题消失。
+  content.push({ type: 'text', text: lead })
+  const userContent = await buildUserContent(fit.userText, [...currentImages, ...quotedImages])
+  if (typeof userContent === 'string') {
+    content.push({ type: 'text', text: userContent })
   } else {
-    const images = [...currentImages, ...quotedImages]
-    content.push({ type: 'text', text: lead })
-    const userContent = await buildUserContent(fit.userText, images)
-    if (typeof userContent === 'string') {
-      content.push({ type: 'text', text: userContent })
-    } else {
-      // 多模态时 userContent 是数组，拆开后并入同一条消息
-      content.push(...userContent)
-    }
+    content.push(...userContent)
   }
 
   // 契约必须排在最后：它是「输出格式要求」，不是上下文的一部分。
