@@ -32,7 +32,7 @@ function rememberImage (url, value) {
  * @returns {{width: number, height: number, type: string}|null}
  */
 export function sniffImageSize (buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 16) return null
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null
 
   // PNG: 8 字节签名 + IHDR
   if (buffer[0] === 0x89 && buffer.toString('ascii', 1, 4) === 'PNG') {
@@ -103,6 +103,7 @@ export async function fetchImageAsDataUrl (url) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 15000)
     let buffer
+    let contentType
     try {
       const response = await fetch(url, { signal: controller.signal })
 
@@ -120,6 +121,7 @@ export async function fetchImageAsDataUrl (url) {
         return null
       }
 
+      contentType = response.headers.get('content-type')
       const arrayBuffer = await response.arrayBuffer()
       buffer = Buffer.from(arrayBuffer)
     } finally {
@@ -139,7 +141,7 @@ export async function fetchImageAsDataUrl (url) {
       return null
     }
 
-    const mimeType = size?.type || (response.headers.get('content-type') || 'image/jpeg').split(';')[0]
+    const mimeType = size?.type || (contentType || 'image/jpeg').split(';')[0]
     const value = {
       dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
       mimeType,

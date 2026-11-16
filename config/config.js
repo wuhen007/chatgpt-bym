@@ -275,6 +275,16 @@ const DEFAULTS = {
     includeContextImages: false,
   },
 
+  ocr: {
+    enable: false,
+    baseURL: 'https://maas-api.cn-huabei-1.xf-yun.com/v2/chat/completions',
+    apiKey: '',
+    model: 'xoppaddleocrv16',
+    maxTokens: 8192,
+    timeoutMs: 30000,
+    maxChars: 4000,
+  },
+
   memory: {
     // 轻量记忆（JSON），不依赖 sqlite3 / 向量库
     enable: false,
@@ -712,7 +722,7 @@ class BymConfig {
  * 现在集中在这里注册，配合 tests/config.mjs 里的断言：
  * schema 里出现的每个段都必须能通过 config[段名] 访问到。
  */
-for (const section of ['trigger', 'speaking', 'guard', 'dedup', 'gate', 'llm', 'context', 'vision', 'memory']) {
+for (const section of ['trigger', 'speaking', 'guard', 'dedup', 'gate', 'llm', 'context', 'vision', 'ocr', 'memory']) {
   Object.defineProperty(BymConfig.prototype, section, {
     get () { return this.data[section] },
     enumerable: true,

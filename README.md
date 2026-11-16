@@ -157,3 +157,18 @@
 [GNU General Public License v3.0](./LICENSE)
 
 原项目 `chatgpt-plugin` 版权归 ikechan8370 所有；本仓库的修改与新增部分同样以 GPL-3.0 授权。
+
+
+## 独立 OCR：让聊天模型读取图片文字
+
+推荐在锅巴面板「独立 OCR（图片文字识别）」中开启并配置：
+
+- 接口地址：`https://maas-api.cn-huabei-1.xf-yun.com/v2/chat/completions`
+- 模型：`xoppaddleocrv16`
+- API Key：填写你自己的讯飞 MaaS Key。
+
+OCR 在消息通过触发判定后调用，将当前消息及引用消息的图片文字附在本轮聊天请求中；概率和关键词规则不变。主聊天模型不需要支持图片，`vision.enable` 可以保持关闭。图片数量、体积和边长上限沿用「图片识别」设置，默认最多 3 张、base64 后 1 MB、边长 2000 像素，截图超限时可在面板适当提高。
+
+OCR 主要识别文字、表格，不等于理解所有画面细节。识别失败时继续正常接话，不把接口报错发送到群里。识别文本受 `ocr.maxChars` 和总上下文预算限制，过长会被裁剪。费用和额度以接口提供方当前账户信息为准。
+
+不要把真实 Key 写入 `config.example.yaml` 或提交仓库；通过锅巴面板保存到自己的运行配置。讯飞接口格式参考：[官方接入文档](https://maas.xfyun.cn/doc/)。

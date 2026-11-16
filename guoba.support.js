@@ -544,6 +544,15 @@ export function supportGuoba () {
           component: 'Switch',
         },
 
+        { label: '独立 OCR（图片文字识别）', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'ocr.enable', label: '启用独立 OCR', component: 'Switch', bottomHelpMessage: '无需聊天模型支持图片；仅触发接话后识别，图片数量和大小沿用图片识别限制。'  },
+        { field: 'ocr.baseURL', label: 'OCR 接口地址', component: 'Input' },
+        { field: 'ocr.apiKey', label: 'OCR API Key', component: 'InputPassword' },
+        { field: 'ocr.model', label: 'OCR 模型', component: 'Input' },
+        { field: 'ocr.maxTokens', label: 'OCR 输出 token 上限', component: 'InputNumber' },
+        { field: 'ocr.timeoutMs', label: 'OCR 超时（毫秒）', component: 'InputNumber' },
+        { field: 'ocr.maxChars', label: '识别文本注入字数上限', component: 'InputNumber' },
+
         // ─────────────────────────── 记忆 ───────────────────────────
         { label: '群记忆', component: 'SOFT_GROUP_BEGIN' },
         {
