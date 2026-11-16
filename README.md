@@ -107,7 +107,7 @@
    ```
 
 3. 重启机器人，首次启动会在 `Yunzai/data/chatgpt-bym/config.yaml` 生成配置；
-4. 编辑配置填 `llm.apiKey`，把 `enable` 改为 `true`，再把群号加进 `trigger.groups`；
+4. **推荐通过锅巴面板配置：本插件已适配 Guoba-Plugin。** 已安装锅巴时，发送 `#锅巴登录`，在面板的插件配置中找到「伪人模式」（chatgpt-bym），填写模型接口地址、API Key、模型名，设置允许发言的群号并开启插件后保存。未安装锅巴时，可手动编辑配置填写 `llm.baseURL`、`llm.apiKey` 和 `llm.model`，把 `enable` 改为 `true`，再把群号加进 `trigger.groups`。详见 [锅巴适配说明](./GUOBA.md)；
 5. 群里发 `#bym 状态` 确认。
 
 > `package.json` 里的 `js-yaml` 锁在 `^4.1.0`（CJS，兼容性最好）。代码同时兼容 5.x（纯 ESM、无 default 导出）——**不要**把 `import yaml from 'js-yaml'` 改回去，那样在 5.x 下会直接启动失败。
